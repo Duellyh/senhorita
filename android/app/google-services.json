@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "651131976291",
+    "project_id": "senhorita-5c5fd",
+    "storage_bucket": "senhorita-5c5fd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:651131976291:android:b8e7176d3fb1b41749d656",
+        "android_client_info": {
+          "package_name": "com.example.senhorita"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCreW_LVCBNlOXeyHeyHu4Z20gF18nh4Nc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
