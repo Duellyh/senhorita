@@ -1,9 +1,19 @@
+// ignore_for_file: use_build_context_synchronously, deprecated_member_use
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter_multi_formatter/flutter_multi_formatter.dart';
+import 'package:senhorita/view/clientes.view.dart';
+import 'package:senhorita/view/configuracoes.view.dart';
+import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/login.view.dart';
+import 'package:senhorita/view/produtos.view.dart';
+import 'package:senhorita/view/relatorios.view.dart';
+import 'package:senhorita/view/vendas.view.dart';
 
 class AdicionarProdutosView extends StatefulWidget {
   final DocumentSnapshot? produto;
@@ -24,6 +34,22 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
   File? imagemSelecionada;
   String? urlImagem;
   String? corSelecionada;
+  String tipoUsuario = '';
+  final user = FirebaseAuth.instance.currentUser;
+  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
+  final Color accentColor = const Color(0xFFec407a);
+  String nomeUsuario = '';
+
+
+  Future<void> buscarTipoUsuario() async {
+    if (user != null) {
+      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      setState(() {
+        tipoUsuario = doc['tipo'] ?? 'funcionario';
+        nomeUsuario = doc['nome'] ?? 'Usuário';
+      });
+    }
+  }
 
   final coresDisponiveis = {
     'PRETO': Colors.black,
@@ -36,6 +62,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'ROXO': Colors.purple,
     'CINZA': Colors.grey,
     'BEGE': const Color(0xFFF5F5DC),
+    
   };
 
   final categorias = [
@@ -69,6 +96,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
   @override
   void initState() {
     super.initState();
+    buscarTipoUsuario();
     if (widget.produto != null) {
       final data = widget.produto!.data() as Map<String, dynamic>;
       nomeController.text = data['nome'] ?? '';
@@ -152,6 +180,7 @@ Future<void> salvarProduto() async {
       'precoVenda': _converterParaDouble(precoVendaController.text),
       'categoria': categoria,
       'dataCadastro': FieldValue.serverTimestamp(),
+      'horaCadastro': FieldValue.serverTimestamp(),
       if (categoriasSemTamanho.contains(categoria))
         'quantidade': int.tryParse(quantidadeController.text) ?? 0
       else ...{
@@ -199,14 +228,87 @@ Future<void> salvarProduto() async {
   Widget build(BuildContext context) {
     return Scaffold(
   appBar: AppBar(
-    backgroundColor: const Color.fromARGB(255, 194, 131, 178),
-    iconTheme: const IconThemeData(color: Colors.white),
-    title: Text(
-      widget.produto != null ? 'Editar Produto' : 'Adicionar Produto',
-      style: const TextStyle(color: Colors.white),
-    ),
-    centerTitle: true,
-  ),
+                backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+                iconTheme: const IconThemeData(color: Colors.white),
+                title: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Senhorita Cintas Modeladores',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                      ),
+                    ),
+                    const Center(
+                      child: Text(
+                        'ADICIONAR PRODUTO',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.logout, color: Colors.white),
+                    onPressed: () async {
+                      await FirebaseAuth.instance.signOut();
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(builder: (_) => const LoginView()),
+                      );
+                    },
+                  ),
+                ],
+           ),
+                drawer: Drawer(
+                        child: Container(
+                          color: primaryColor,
+                          child: ListView(
+                            padding: EdgeInsets.zero,
+                            children: [
+                              DrawerHeader(
+                                decoration: BoxDecoration(color: accentColor),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Icon(Icons.store, color: Colors.white, size: 48),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                  'Olá, ${nomeUsuario.toUpperCase()}',
+                                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                                  ],
+                                ),
+                              ),
+                             if (tipoUsuario == 'admin')
+                              _menuItem(Icons.dashboard, 'Home', () {
+                                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                                    }),
+                              _menuItem(Icons.attach_money, 'Vender', () {
+                                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+                              }),
+                              _menuItem(Icons.checkroom, 'Produtos', () {
+                                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+                              }),
+                              _menuItem(Icons.add_box, 'Adicionar Produto', () {
+                                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+                              }),
+                              _menuItem(Icons.people, 'Clientes', () {
+                                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+                              }),
+                              if (tipoUsuario == 'admin')
+                                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                                }),
+                              if (tipoUsuario == 'admin')
+                                _menuItem(Icons.settings, 'Configurações', () {
+                                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                                }),
+                            ],
+                          ),
+                        ),
+                      ),
   body: Padding(
     padding: const EdgeInsets.all(16),
     child: Form(
@@ -437,3 +539,10 @@ Future<void> salvarProduto() async {
 
   }
 }
+  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(title, style: const TextStyle(color: Colors.white)),
+      onTap: onTap,
+    );
+  }

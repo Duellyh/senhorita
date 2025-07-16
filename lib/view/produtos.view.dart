@@ -1,8 +1,17 @@
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:barcode_widget/barcode_widget.dart';
+import 'package:senhorita/view/clientes.view.dart';
+import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/estoque.view.dart';
+import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/login.view.dart';
+import 'package:senhorita/view/relatorios.view.dart';
+import 'package:senhorita/view/vendas.view.dart';
 
 class ProdutosView extends StatefulWidget {
   const ProdutosView({super.key});
@@ -14,9 +23,27 @@ class ProdutosView extends StatefulWidget {
 class _ProdutosViewState extends State<ProdutosView> {
   String searchTerm = '';
   TextEditingController searchController = TextEditingController();
+  String tipoUsuario = '';
+  final user = FirebaseAuth.instance.currentUser;
+  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
+  final Color accentColor = const Color(0xFFec407a);
+  String nomeUsuario = '';
 
-  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178); // Roxo
-  final Color accentColor = const Color(0xFFec407a); // Rosa
+  @override
+  void initState() {
+    super.initState();
+    buscarTipoUsuario();
+  }
+
+  Future<void> buscarTipoUsuario() async {
+    if (user != null) {
+      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      setState(() {
+        tipoUsuario = doc['tipo'] ?? 'funcionario';
+        nomeUsuario = doc['nome'] ?? 'Usuário';
+      });
+    }
+  }
 
   void _editarProduto(BuildContext context, DocumentSnapshot produto) {
     Navigator.push(
@@ -175,11 +202,41 @@ Future<int> _buscarQuantidadeEstoque(String produtoId) async {
 
   @override
   Widget build(BuildContext context) {
+
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: primaryColor,
-        title: const Text('Produtos', style: TextStyle(color: Colors.white)),
-        iconTheme: const IconThemeData(color: Colors.white),
+        backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+                iconTheme: const IconThemeData(color: Colors.white),
+                title: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Senhorita Cintas Modeladores',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                      ),
+                    ),
+                    const Center(
+                      child: Text(
+                        'PRODUTOS',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.logout, color: Colors.white),
+                    onPressed: () async {
+                      await FirebaseAuth.instance.signOut();
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(builder: (_) => const LoginView()),
+                      );
+                    },
+                  ),
+                ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(56),
           child: Padding(
@@ -199,46 +256,94 @@ Future<int> _buscarQuantidadeEstoque(String produtoId) async {
           ),
         ),
       ),
-      body: StreamBuilder<QuerySnapshot>(
-  stream: _buscarProdutosFirestore(searchTerm.trim()),
-  builder: (context, snapshot) {
-    if (snapshot.connectionState == ConnectionState.waiting) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-      return const Center(child: Text('Nenhum produto encontrado.'));
-    }
+                drawer: Drawer(
+                  child: Container(
+                    color: primaryColor,
+                    child: ListView(
+                      padding: EdgeInsets.zero,
+                      children: [
+                        DrawerHeader(
+                          decoration: BoxDecoration(color: accentColor),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.store, color: Colors.white, size: 48),
+                              const SizedBox(height: 8),
+                              Text(
+                            'Olá, ${nomeUsuario.toUpperCase()}',
+                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                          ),   
+                           ],
+                          ),
+                        ),
+                        if (tipoUsuario == 'admin')
+                      _menuItem(Icons.dashboard, 'Home', () {
+                        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                      }),
+                        _menuItem(Icons.attach_money, 'Vender', () {
+                          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+                        }),
+                        _menuItem(Icons.checkroom, 'Produtos', () {
+                          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+                        }),
+                        _menuItem(Icons.add_box, 'Adicionar Produto', () {
+                          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+                        }),
+                        _menuItem(Icons.people, 'Clientes', () {
+                          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+                        }),
+                        if (tipoUsuario == 'admin')
+                          _menuItem(Icons.bar_chart, 'Relatórios', () {
+                            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                          }),
+                        if (tipoUsuario == 'admin')
+                          _menuItem(Icons.settings, 'Configurações', () {
+                            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                          }),
+                      ],
+                    ),
+                  ),
+                ),
+              body: StreamBuilder<QuerySnapshot>(
+                  stream: _buscarProdutosFirestore(searchTerm.trim()),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                      return const Center(child: Text('Nenhum produto encontrado.'));
+                    }
 
-    final produtos = snapshot.data!.docs;
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: produtos.length,
-      itemBuilder: (context, index) {
-        final produto = produtos[index];
-        final data = produto.data() as Map<String, dynamic>;
-        final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
+                  final produtos = snapshot.data!.docs;
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(8),
+                    itemCount: produtos.length,
+                    itemBuilder: (context, index) {
+                      final produto = produtos[index];
+                      final data = produto.data() as Map<String, dynamic>;
+                      final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
 
-        return Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.symmetric(vertical: 6),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    data['foto'] != null
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(
-                              data['foto'],
-                              width: 60,
-                              height: 60,
-                              fit: BoxFit.cover,
-                            ),
-                          )
+                      return Card(
+                        elevation: 2,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  data['foto'] != null
+                                      ? ClipRRect(
+                                          borderRadius: BorderRadius.circular(8),
+                                          child: Image.network(
+                                            data['foto'],
+                                            width: 60,
+                                            height: 60,
+                                            fit: BoxFit.cover,
+                                          ),
+                                        )
                         : const Icon(Icons.image, size: 60),
                     const SizedBox(width: 12),
                     Expanded(
@@ -321,3 +426,10 @@ Future<int> _buscarQuantidadeEstoque(String produtoId) async {
     );
   }
 }
+  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(title, style: const TextStyle(color: Colors.white)),
+      onTap: onTap,
+    );
+  }

@@ -1,5 +1,16 @@
+// ignore_for_file: use_build_context_synchronously
+
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:senhorita/view/adicionar.produtos.view.dart';
+import 'package:senhorita/view/clientes.view.dart';
+import 'package:senhorita/view/configuracoes.view.dart';
+import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/login.view.dart';
+import 'package:senhorita/view/produtos.view.dart';
+import 'package:senhorita/view/relatorios.view.dart';
 
 class VendasView extends StatefulWidget {
   const VendasView({super.key});
@@ -20,9 +31,40 @@ class _VendasViewState extends State<VendasView> {
   final TextEditingController precoVendaController = TextEditingController();
   final TextEditingController descontoController = TextEditingController();
   final TextEditingController valorPagamentoController = TextEditingController();
+  final TextEditingController freteController = TextEditingController();
+  final TextEditingController clienteNomeController = TextEditingController();
+  final TextEditingController clienteTelefoneController = TextEditingController();
+  Map<String, dynamic>? clienteSelecionado;
+  bool mostrarCamposCliente = false;
+  bool mostrarCampoFrete = false;
   String? formaSelecionada;
   final List<Map<String, dynamic>> pagamentos = [];
+  String tipoNotaSelecionada = 'pagamento';
+  List<Map<String, dynamic>> sugestoesProdutos = [];
+  Timer? debounceTimer;
+  List<Map<String, dynamic>> sugestoesClientes = [];
+  Timer? debounceClienteTimer;
+  String tipoUsuario = '';
+  final user = FirebaseAuth.instance.currentUser;
+  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
+  final Color accentColor = const Color(0xFFec407a);
+  String nomeUsuario = '';
 
+
+  @override
+  void initState() {
+    super.initState();
+    buscarTipoUsuario();
+  }
+  Future<void> buscarTipoUsuario() async {
+    if (user != null) {
+      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      setState(() {
+        tipoUsuario = doc['tipo'] ?? 'funcionario';
+        nomeUsuario = doc['nome'] ?? 'Usuário';
+      });
+    }
+  }
 
   String _formatarPreco(dynamic valor) {
     if (valor == null) return '--';
@@ -48,49 +90,74 @@ double _calcularDescontoTotal() {
 double _calcularTotalPago() {
   return pagamentos.fold(0.0, (total, p) => total + (p['valor'] as double));
 }
+Future<List<Map<String, dynamic>>> buscarSugestoesProduto(String query) async {
+  final resultado = await FirebaseFirestore.instance
+      .collection('produtos')
+      .get();
 
+  return resultado.docs
+      .where((doc) {
+        final p = doc.data();
+        return (p['nome'] as String).toLowerCase().contains(query.toLowerCase());
+      })
+      .map((doc) {
+        final dados = doc.data();
+        dados['docId'] = doc.id;
+        return dados;
+      })
+      .toList();
+}
 
-  Future<void> buscarProduto() async {
-    final termo = buscaController.text.trim();
-    if (termo.isEmpty) return;
-
-    setState(() {
-      carregandoBusca = true;
-      produtoEncontrado = null;
-      tamanhoSelecionado = null;
-    });
-
-    try {
-      final query = await FirebaseFirestore.instance.collection('produtos').get();
-
-      final produto = query.docs
-          .map((doc) => doc.data())
-          .firstWhere(
-            (p) =>
-                p['id'] == termo ||
-                p['codigoBarras'] == termo ||
-                (p['nome'] as String).toLowerCase().contains(termo.toLowerCase()),
-            orElse: () => {},
-          );
-
-      if (produto.isNotEmpty) {
-        setState(() {
-          produtoEncontrado = produto;
-        });
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Produto não encontrado')),
-        );
-      }
-    } catch (e) {
-      debugPrint('Erro ao buscar produto: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Erro ao buscar produto')),
-      );
-    } finally {
-      setState(() => carregandoBusca = false);
-    }
+Future<void> buscarProdutosSugestoes(String termo) async {
+  if (termo.isEmpty) {
+    setState(() => sugestoesProdutos = []);
+    return;
   }
+
+  try {
+    final query = await FirebaseFirestore.instance.collection('produtos').get();
+
+    final resultados = query.docs.where((doc) {
+      final p = doc.data();
+      final nome = (p['nome'] ?? '').toString().toLowerCase();
+      final codigoBarras = (p['codigoBarras'] ?? '').toString().toLowerCase();
+      final id = (p['id'] ?? '').toString().toLowerCase();
+      final termoLower = termo.toLowerCase();
+
+      return nome.contains(termoLower) || codigoBarras.contains(termoLower) || id == termoLower;
+    }).map((doc) {
+      final data = doc.data();
+      data['docId'] = doc.id;
+      return data;
+    }).toList();
+
+    setState(() => sugestoesProdutos = resultados);
+  } catch (e) {
+    debugPrint('Erro ao buscar sugestões: $e');
+  }
+}
+Future<void> buscarClientesDinamicamente(String termo) async {
+  if (termo.trim().isEmpty) {
+    setState(() => sugestoesClientes = []);
+    return;
+  }
+
+  try {
+    final query = await FirebaseFirestore.instance.collection('clientes').get();
+
+    final termoLower = termo.toLowerCase();
+    final resultados = query.docs.where((doc) {
+      final data = doc.data();
+      final nome = (data['nome'] ?? '').toString().toLowerCase();
+      final telefone = (data['telefone'] ?? '').toString().toLowerCase();
+      return nome.contains(termoLower) || telefone.contains(termoLower);
+    }).map((doc) => doc.data()).toList();
+
+    setState(() => sugestoesClientes = resultados);
+  } catch (e) {
+    debugPrint('Erro ao buscar clientes dinamicamente: $e');
+  }
+}
 
 void adicionarProdutoAtual() {
   if (_formKey.currentState!.validate() && produtoEncontrado != null) {
@@ -112,6 +179,7 @@ void adicionarProdutoAtual() {
 
     final item = {
       'produtoId': produtoEncontrado?['id'],
+      'docId': produtoEncontrado?['docId'], // ✅ Inclui o document ID aqui
       'produtoNome': produtoEncontrado?['nome'],
       'codigoBarras': produtoEncontrado?['codigoBarras'],
       'precoVenda': precoPadrao,
@@ -133,6 +201,22 @@ void adicionarProdutoAtual() {
     });
   }
 }
+void _imprimirNotaPagamento() {
+  // Aqui você integraria com a impressora térmica real
+  debugPrint('🖨️ Imprimindo Nota de Pagamento...');
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Nota de pagamento enviada para impressão.')),
+  );
+}
+
+void _imprimirNotaFiscal() {
+  // Aqui você integraria com a impressora térmica real
+  debugPrint('🖨️ Imprimindo Nota Fiscal...');
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Nota fiscal enviada para impressão.')),
+  );
+}
+
 
 Future<void> realizarVenda() async {
   final totalVenda = _calcularTotalGeral();
@@ -160,19 +244,28 @@ Future<void> realizarVenda() async {
   try {
     final vendaRef = await firestore.collection('vendas').add({
       'dataVenda': DateTime.now().toIso8601String(),
+      'horaVenda': DateTime.now().toIso8601String(),
+      'totalVenda': totalVenda,
+      'tipoNota': tipoNotaSelecionada,
       'itens': itensVendidos,
       'total': totalVenda,
       'pagamentos': pagamentos,
       'totalPago': totalPago,
       'troco': (totalPago - totalVenda).clamp(0, double.infinity),
+      'frete': freteController.text.trim().isNotEmpty? _converterParaDouble(freteController.text.trim()) : null,
+      'cliente': clienteNomeController.text.trim().isNotEmpty? {
+        'nome': clienteNomeController.text.trim(),
+        'telefone': clienteTelefoneController.text.trim(),}: null,
+
     });
 
     for (final item in itensVendidos) {
       final produtoId = item['produtoId'];
+      final produtoDocId = item['docId'];
       final tamanho = item['tamanho'];
       final quantidadeVendida = item['quantidade'];
 
-      // Atualiza/remover estoque
+      // 🔍 Atualiza/remover estoque do item vendido (coleção "estoque")
       final estoqueQuery = await firestore
           .collection('estoque')
           .where('produtoId', isEqualTo: produtoId)
@@ -193,21 +286,19 @@ Future<void> realizarVenda() async {
         }
       }
 
-      // Atualiza o produto
-      final produtoQuery = await firestore
-          .collection('produtos')
-          .where('id', isEqualTo: produtoId)
-          .limit(1)
-          .get();
+      // 🔄 Atualiza produto na coleção "produtos"
+      final produtoRef = firestore.collection('produtos').doc(produtoDocId);
+      final produtoDoc = await produtoRef.get();
 
-      if (produtoQuery.docs.isNotEmpty) {
-        final produtoDoc = produtoQuery.docs.first;
-        final produtoRef = produtoDoc.reference;
-        final produtoData = produtoDoc.data();
+      if (produtoDoc.exists) {
+        final produtoData = produtoDoc.data() as Map<String, dynamic>;
 
-        Map<String, dynamic> tamanhos = {};
-        if (produtoData.containsKey('tamanhos') && tamanho.isNotEmpty) {
-          tamanhos = Map<String, dynamic>.from(produtoData['tamanhos']);
+        final possuiTamanhos = produtoData.containsKey('tamanhos') &&
+            (produtoData['tamanhos'] as Map<String, dynamic>).isNotEmpty;
+
+        if (possuiTamanhos && tamanho.isNotEmpty) {
+          // 👕 Produto com tamanhos
+          Map<String, dynamic> tamanhos = Map<String, dynamic>.from(produtoData['tamanhos']);
           final estoqueAtualTamanho = tamanhos[tamanho] ?? 0;
           final novoEstoqueTamanho = estoqueAtualTamanho - quantidadeVendida;
 
@@ -216,18 +307,44 @@ Future<void> realizarVenda() async {
           } else {
             tamanhos.remove(tamanho);
           }
+
+          final novaQuantidadeTotalProduto = tamanhos.values.fold<int>(0, (soma, qtd) => soma + (qtd as int));
+
+          batch.update(produtoRef, {
+            'tamanhos': tamanhos,
+            'quantidade': novaQuantidadeTotalProduto,
+          });
+        } else {
+          // 📦 Produto sem tamanhos
+          final quantidadeAtual = (produtoData['quantidade'] ?? 0) as int;
+          final novaQuantidade = quantidadeAtual - quantidadeVendida;
+
+          batch.update(produtoRef, {
+            'quantidade': novaQuantidade > 0 ? novaQuantidade : 0,
+          });
+
+          // 🚚 Mover para "estoque" se quantidade zerar
+          if (novaQuantidade <= 0) {
+            final estoqueCheck = await firestore
+                .collection('estoque')
+                .where('produtoId', isEqualTo: produtoId)
+                .limit(1)
+                .get();
+
+            if (estoqueCheck.docs.isEmpty) {
+              await firestore.collection('estoque').add({
+                'produtoId': produtoId,
+                'nome': produtoData['nome'],
+                'codigoBarras': produtoData['codigoBarras'],
+                'quantidade': 0,
+                'tamanho': '',
+                'dataEntrada': DateTime.now().toIso8601String(),
+              });
+            }
+          }
         }
 
-        // Recalcula a quantidade total com base nos tamanhos atualizados
-        final novaQuantidadeTotalProduto = tamanhos.values.fold<int>(0, (soma, qtd) => soma + (qtd as int));
-
-        // ✅ Sempre atualiza o produto, nunca deleta
-        batch.update(produtoRef, {
-          'tamanhos': tamanhos,
-          'quantidade': novaQuantidadeTotalProduto,
-        });
-
-        // Salva em vendidos
+        // 🧾 Salva item vendido no histórico
         await firestore.collection('vendidos').add({
           'produtoId': produtoId,
           'produtoNome': item['produtoNome'] ?? '',
@@ -236,13 +353,41 @@ Future<void> realizarVenda() async {
           'tamanho': tamanho,
           'precoFinal': item['precoFinal'] ?? 0.0,
           'dataVenda': DateTime.now().toIso8601String(),
+          'horaVenda': DateTime.now().toIso8601String(),
           'vendaId': vendaRef.id,
           'detalhesProduto': produtoData,
+          'desconto': item['desconto'] ?? 0.0,
+          'precoPromocional': item['precoPromocional'] ?? 0.0,
         });
       }
     }
 
-    await batch.commit();
+            await batch.commit();
+
+              if (clienteNomeController.text.trim().isNotEmpty) {
+            final clienteExiste = await FirebaseFirestore.instance
+                .collection('clientes')
+                .where('nome', isEqualTo: clienteNomeController.text.trim())
+                .where('telefone', isEqualTo: clienteTelefoneController.text.trim())
+                .get();
+
+            if (clienteExiste.docs.isEmpty) {
+              await FirebaseFirestore.instance.collection('clientes').add({
+                'nome': clienteNomeController.text.trim(),
+                'telefone': clienteTelefoneController.text.trim(),
+                'dataCadastro': DateTime.now().toIso8601String(),
+              });
+            }
+          }
+
+
+    // Chamar impressão conforme tipo de nota
+        if (tipoNotaSelecionada == 'pagamento') {
+          _imprimirNotaPagamento();
+        } else if (tipoNotaSelecionada == 'fiscal') {
+          _imprimirNotaFiscal();
+        }
+
 
     showDialog(
       context: context,
@@ -265,6 +410,10 @@ Future<void> realizarVenda() async {
     setState(() {
       itensVendidos.clear();
       pagamentos.clear();
+      freteController.clear();
+      clienteNomeController.clear();
+      clienteTelefoneController.clear();
+      clienteSelecionado = null;
     });
   } catch (e, stack) {
     debugPrint('❌ Erro ao registrar venda: $e');
@@ -274,18 +423,94 @@ Future<void> realizarVenda() async {
     );
   }
 }
-
   @override
 Widget build(BuildContext context) {
   final tamanhosMap = produtoEncontrado?['tamanhos'] as Map<String, dynamic>?;
+    
 
   return Scaffold(
-    appBar: AppBar(
-      title: const Text('Vender Produto', style: TextStyle(color: Colors.white)),
-      backgroundColor: const Color.fromARGB(255, 194, 131, 178),
-      centerTitle: true,
-      iconTheme: const IconThemeData(color: Colors.white),
-    ),
+              appBar: AppBar(
+                backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+                iconTheme: const IconThemeData(color: Colors.white),
+                title: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Senhorita Cintas Modeladores',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                      ),
+                    ),
+                    const Center(
+                      child: Text(
+                        'VENDER PRODUTO',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.logout, color: Colors.white),
+                    onPressed: () async {
+                      await FirebaseAuth.instance.signOut();
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(builder: (_) => const LoginView()),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            drawer: Drawer(
+              child: Container(
+                color: primaryColor,
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    DrawerHeader(
+                      decoration: BoxDecoration(color: accentColor),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.store, color: Colors.white, size: 48),
+                          const SizedBox(height: 8),
+                          Text(
+                          'Olá, ${nomeUsuario.toUpperCase()}',
+                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                  ],
+                      ),
+                    ),
+                    if (tipoUsuario == 'admin')
+                      _menuItem(Icons.dashboard, 'Home', () {
+                        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                      }),
+                    _menuItem(Icons.attach_money, 'Vender', () {
+                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+                    }),
+                    _menuItem(Icons.checkroom, 'Produtos', () {
+                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+                    }),
+                    _menuItem(Icons.add_box, 'Adicionar Produto', () {
+                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+                    }),
+                    _menuItem(Icons.people, 'Clientes', () {
+                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+                    }),
+                    if (tipoUsuario == 'admin')
+                      _menuItem(Icons.bar_chart, 'Relatórios', () {
+                        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                      }),
+                    if (tipoUsuario == 'admin')
+                      _menuItem(Icons.settings, 'Configurações', () {
+                        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                      }),
+                  ],
+                ),
+              ),
+            ),
     body: Padding(
       padding: const EdgeInsets.all(12),
       child: Form(
@@ -294,22 +519,42 @@ Widget build(BuildContext context) {
           children: [
             const Text('🔎 Buscar Produto', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            TextFormField(
-              controller: buscaController,
-              decoration: InputDecoration(
-                labelText: 'Nome, ID ou código de barras',
-                suffixIcon: carregandoBusca
-                    ? const Padding(
-                        padding: EdgeInsets.all(10),
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : IconButton(icon: const Icon(Icons.search), onPressed: buscarProduto),
-                border: OutlineInputBorder(),
-              ),
-              onFieldSubmitted: (_) => buscarProduto(),
-            ),
+                TextFormField(
+                  controller: buscaController,
+                  decoration: InputDecoration(
+                    labelText: 'Nome, ID ou código de barras',
+                    suffixIcon: carregandoBusca
+                        ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.search),
+                    border: const OutlineInputBorder(),
+                  ),
+                  onChanged: (value) {
+                    if (debounceTimer?.isActive ?? false) debounceTimer!.cancel();
+                    debounceTimer = Timer(const Duration(milliseconds: 300), () {
+                      buscarProdutosSugestoes(value.trim());
+                    });
+                  },
+                ),
+                if (sugestoesProdutos.isNotEmpty)
+                  ...sugestoesProdutos.map((produto) => Card(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    child: ListTile(
+                      leading: const Icon(Icons.inventory),
+                      title: Text(produto['nome'] ?? 'Produto sem nome'),
+                      subtitle: Text('Código: ${produto['codigoBarras']}'),
+                      onTap: () {
+                        setState(() {
+                          produtoEncontrado = produto;
+                          sugestoesProdutos = [];
+                          buscaController.text = produto['nome'];
+                        });
+                      },
+                    ),
+                  )),
             const SizedBox(height: 16),
-
             if (produtoEncontrado != null)
               Card(
                 elevation: 4,
@@ -389,11 +634,14 @@ Widget build(BuildContext context) {
                           final val = int.tryParse(value ?? '');
                           if (val == null || val <= 0) return 'Quantidade inválida';
                           int estoque = 9999;
-                          if (tamanhosMap != null && tamanhoSelecionado != null) {
-                            estoque = tamanhosMap[tamanhoSelecionado] ?? 0;
-                          } else if (produtoEncontrado?['quantidade'] != null) {
-                            estoque = produtoEncontrado!['quantidade'];
-                          }
+                          final possuiTamanhosValidos = tamanhosMap != null && tamanhosMap.isNotEmpty;
+
+                            if (possuiTamanhosValidos && tamanhoSelecionado != null) {
+                              estoque = tamanhosMap[tamanhoSelecionado] ?? 0;
+                            } else if (produtoEncontrado?['quantidade'] != null) {
+                              estoque = produtoEncontrado!['quantidade'];
+                            }
+
                           if (val > estoque) return 'Estoque insuficiente';
                           return null;
                         },
@@ -403,12 +651,15 @@ Widget build(BuildContext context) {
                         },
                       ),
                       const SizedBox(height: 12),
-                      ElevatedButton.icon(
-                        onPressed: adicionarProdutoAtual,
-                        icon: const Icon(Icons.add_shopping_cart),
-                        label: const Text('Adicionar Produto'),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                      ),
+                            ElevatedButton.icon(
+                          onPressed: adicionarProdutoAtual,
+                          icon: const Icon(Icons.add_shopping_cart),
+                          label: const Text('Adicionar Produto'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.black, 
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -465,24 +716,28 @@ Widget build(BuildContext context) {
                 onChanged: (value) => setState(() => formaSelecionada = value),
               ),
               const SizedBox(height: 10),
-              ElevatedButton.icon(
-                onPressed: () {
-                  final valor = double.tryParse(valorPagamentoController.text.replaceAll(',', '.')) ?? 0;
-                  if (valor <= 0 || formaSelecionada == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Preencha valor e forma de pagamento válidos')),
-                    );
-                    return;
-                  }
-                  setState(() {
-                    pagamentos.add({'forma': formaSelecionada, 'valor': valor});
-                    valorPagamentoController.clear();
-                    formaSelecionada = null;
-                  });
-                },
-                icon: const Icon(Icons.attach_money),
-                label: const Text('Adicionar Pagamento'),
-              ),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      final valor = double.tryParse(valorPagamentoController.text.replaceAll(',', '.')) ?? 0;
+                      if (valor <= 0 || formaSelecionada == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Preencha valor e forma de pagamento válidos')),
+                        );
+                        return;
+                      }
+                      setState(() {
+                        pagamentos.add({'forma': formaSelecionada, 'valor': valor});
+                        valorPagamentoController.clear();
+                        formaSelecionada = null;
+                      });
+                    },
+                    icon: const Icon(Icons.attach_money),
+                    label: const Text('Adicionar Pagamento'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,   // Fundo verde
+                      foregroundColor: Colors.black,   // Texto e ícone pretos
+                    ),
+                  ),
               const SizedBox(height: 10),
               ...pagamentos.map((p) => ListTile(
                     title: Text('R\$ ${p['valor'].toStringAsFixed(2)}'),
@@ -502,6 +757,112 @@ Widget build(BuildContext context) {
                 ),
               ),
             ],
+            const SizedBox(height: 20),
+
+              // Botão para exibir campos de cliente
+              ElevatedButton.icon(
+                onPressed: () {
+                  setState(() => mostrarCamposCliente = !mostrarCamposCliente);
+                },
+                icon: const Icon(Icons.person_add),
+                label: Text(mostrarCamposCliente ? 'Ocultar Cliente' : 'Adicionar Cliente'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade100,
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              if (mostrarCamposCliente) ...[
+                const SizedBox(height: 10),
+                const Text('👤 Cliente (opcional)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                  TextFormField(
+                    controller: clienteNomeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Nome do cliente',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (value) {
+                      if (debounceClienteTimer?.isActive ?? false) debounceClienteTimer!.cancel();
+                      debounceClienteTimer = Timer(const Duration(milliseconds: 300), () {
+                        buscarClientesDinamicamente(value);
+                      });
+                    },
+                  ),
+                  if (sugestoesClientes.isNotEmpty)
+                    ...sugestoesClientes.map((cliente) => ListTile(
+                      leading: const Icon(Icons.person),
+                      title: Text(cliente['nome'] ?? ''),
+                      subtitle: Text(cliente['telefone'] ?? ''),
+                      onTap: () {
+                        setState(() {
+                          clienteSelecionado = cliente;
+                          clienteNomeController.text = cliente['nome'] ?? '';
+                          clienteTelefoneController.text = cliente['telefone'] ?? '';
+                          sugestoesClientes = [];
+                        });
+                      },
+                    )),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: clienteTelefoneController,
+                  decoration: const InputDecoration(
+                    labelText: 'Telefone do cliente',
+                    hintText: 'Ex: (99) 99999-9999',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.phone,
+                ),
+              ],
+              const SizedBox(height: 20),
+              // Botão para exibir campo de frete
+              ElevatedButton.icon(
+                onPressed: () {
+                  setState(() => mostrarCampoFrete = !mostrarCampoFrete);
+                },
+                icon: const Icon(Icons.local_shipping),
+                label: Text(mostrarCampoFrete ? 'Ocultar Frete' : 'Adicionar Frete'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange.shade100,
+                  foregroundColor: Colors.black,
+                ),
+              ),
+
+              if (mostrarCampoFrete) ...[
+                const SizedBox(height: 10),
+                const Text('🚚 Frete (opcional)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: freteController,
+                  decoration: const InputDecoration(
+                    labelText: 'Valor do frete',
+                    hintText: 'Ex: 10.00',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                ),
+              ],
+
+            const SizedBox(height: 20),
+              const Text('🖨️ Tipo de Nota', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: tipoNotaSelecionada,
+                decoration: const InputDecoration(
+                  labelText: 'Escolha o tipo de nota',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'pagamento', child: Text('Nota de Pagamento')),
+                  
+                  DropdownMenuItem(value: 'fiscal', child: Text('Nota Fiscal')),
+                ],
+                onChanged: (value) {
+                  setState(() {
+                    tipoNotaSelecionada = value!;
+                  });
+                },
+              ),
+
 
             const SizedBox(height: 20),
             ElevatedButton.icon(
@@ -522,3 +883,11 @@ Widget build(BuildContext context) {
 }
 
 }
+
+  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(title, style: const TextStyle(color: Colors.white)),
+      onTap: onTap,
+    );
+  }

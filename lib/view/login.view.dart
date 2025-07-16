@@ -1,5 +1,9 @@
+// ignore_for_file: use_build_context_synchronously
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/vendas.view.dart';
 import 'package:senhorita/viewmodel/login_viewmodel.dart';
 
 
@@ -65,60 +69,161 @@ class _LoginViewState extends State<LoginView> {
     );
   }
 
-  void _fazerLogin() async {
-    final usuario = _usuarioController.text.trim();
-    final senha = _senhaController.text;
+void _fazerLogin() async {
+  final entrada = _usuarioController.text.trim().toLowerCase();
+  final senha = _senhaController.text;
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+  if (entrada.isEmpty || senha.isEmpty) {
+    _mostrarAlerta(
+      'Atenção',
+      'Preencha todos os campos.',
+      Colors.orange,
+      Icons.info_outline,
     );
+    return;
+  }
 
-    final erro = await _viewModel.login(usuario, senha);
-    Navigator.of(context).pop();
+  // Mostra loading
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const Center(child: CircularProgressIndicator()),
+  );
 
-    if (erro == null) {
+  try {
+    String? email;
+    DocumentSnapshot? usuarioDoc;
+
+    if (entrada.contains('@')) {
+      // Buscar pelo e-mail
+      final snapshot = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .where('email', isEqualTo: entrada)
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        Navigator.of(context).pop();
+        _mostrarAlerta('Erro', 'E-mail não encontrado.', Colors.red, Icons.error_outline);
+        return;
+      }
+
+      usuarioDoc = snapshot.docs.first;
+      email = entrada;
+    } else {
+      // Buscar pelo nome de usuário
+      final snapshot = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .where('nomeUsuario', isEqualTo: entrada)
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        Navigator.of(context).pop();
+        _mostrarAlerta('Erro', 'Usuário não encontrado.', Colors.red, Icons.error_outline);
+        return;
+      }
+
+      usuarioDoc = snapshot.docs.first;
+      email = usuarioDoc['email'];
+    }
+
+    // Faz login
+    final erro = await _viewModel.login(email!, senha);
+
+    if (erro != null) {
+      Navigator.of(context).pop();
+      _mostrarAlerta('Erro', erro, Colors.red, Icons.error_outline);
+      return;
+    }
+
+    // Verifica o tipo do usuário após login
+    final tipoUsuario = usuarioDoc['tipo'];
+
+    Navigator.of(context).pop(); // Fecha loading
+
+    if (tipoUsuario == 'admin') {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomeView()),
       );
+    } else if (tipoUsuario == 'funcionario') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const VendasView()),
+      );
     } else {
-      _mostrarAlerta('Erro', erro, Colors.red, Icons.error_outline);
+      _mostrarAlerta(
+        'Erro',
+        'Tipo de usuário inválido.',
+        Colors.red,
+        Icons.error_outline,
+      );
     }
-  }
+  } catch (e, stack) {
+  Navigator.of(context).pop();
 
-  void _redefinirSenha() {
-    final TextEditingController emailController = TextEditingController();
+  _mostrarAlerta(
+    'Erro',
+    'Falha ao tentar fazer login.\nErro: ${e.toString()}',
+    Colors.red,
+    Icons.error_outline,
+  );
 
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Redefinir senha'),
-        content: TextField(
-          controller: emailController,
-          keyboardType: TextInputType.emailAddress,
-          decoration: const InputDecoration(
-            labelText: 'Digite seu e-mail',
-            border: OutlineInputBorder(),
-          ),
+  debugPrint('Erro no login: $e');
+  debugPrint('Stack trace: $stack');
+}
+
+}
+
+
+
+void _redefinirSenha() {
+  final TextEditingController usuarioController = TextEditingController();
+
+  showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Redefinir senha'),
+      content: TextField(
+        controller: usuarioController,
+        decoration: const InputDecoration(
+          labelText: 'Digite seu nome de usuário',
+          border: OutlineInputBorder(),
         ),
-        actions: [
-          TextButton(
-            child: const Text('Cancelar'),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          TextButton(
-            child: const Text('Enviar'),
-            onPressed: () async {
-              final email = emailController.text.trim();
-              Navigator.of(context).pop();
+      ),
+      actions: [
+        TextButton(
+          child: const Text('Cancelar'),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        TextButton(
+          child: const Text('Enviar'),
+          onPressed: () async {
+            final nomeUsuario = usuarioController.text.trim().toLowerCase();
+            Navigator.of(context).pop();
 
-              showDialog(
-                context: context,
-                barrierDismissible: false,
-                builder: (_) => const Center(child: CircularProgressIndicator()),
-              );
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (_) => const Center(child: CircularProgressIndicator()),
+            );
+
+            try {
+              // Buscar o e-mail a partir do nome de usuário
+              final snapshot = await FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .where('nomeUsuario', isEqualTo: nomeUsuario)
+                  .limit(1)
+                  .get();
+
+              if (snapshot.docs.isEmpty) {
+                Navigator.of(context).pop();
+                _mostrarAlerta('Erro', 'Usuário não encontrado.', Colors.red, Icons.error_outline);
+                return;
+              }
+
+              final email = snapshot.docs.first['email'];
 
               final erro = await _viewModel.redefinirSenha(email);
               Navigator.of(context).pop();
@@ -133,12 +238,17 @@ class _LoginViewState extends State<LoginView> {
               } else {
                 _mostrarAlerta('Erro', erro, Colors.red, Icons.error_outline);
               }
-            },
-          ),
-        ],
-      ),
-    );
-  }
+            } catch (e) {
+              Navigator.of(context).pop();
+              _mostrarAlerta('Erro', 'Ocorreu um erro ao redefinir a senha.', Colors.red, Icons.error_outline);
+            }
+          },
+        ),
+      ],
+    ),
+  );
+}
+
 
   @override
   Widget build(BuildContext context) {

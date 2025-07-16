@@ -6,6 +6,8 @@ import 'package:senhorita/service/auth_service.dart';
 class LoginViewModel {
   final AuthService _authService = AuthService();
 
+  get usuarioLogado => null;
+
   Future<String?> login(String email, String senha) async {
     if (email.isEmpty || senha.isEmpty) return 'Preencha todos os campos';
 

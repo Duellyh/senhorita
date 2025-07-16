@@ -1,6 +1,9 @@
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
@@ -9,8 +12,35 @@ import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 import 'login.view.dart';
 
-class HomeView extends StatelessWidget {
+class HomeView extends StatefulWidget {
   const HomeView({super.key});
+
+  @override
+  State<HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<HomeView> {
+  String tipoUsuario = '';
+  final user = FirebaseAuth.instance.currentUser;
+  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
+  final Color accentColor = const Color(0xFFec407a);
+  String nomeUsuario = '';
+
+  @override
+  void initState() {
+    super.initState();
+    buscarTipoUsuario();
+  }
+
+  Future<void> buscarTipoUsuario() async {
+    if (user != null) {
+      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      setState(() {
+        tipoUsuario = doc['tipo'] ?? 'funcionario';
+        nomeUsuario = doc['nome'] ?? 'Usuário';
+      });
+    }
+  }
 
   Future<int> _contarDocumentos(String colecao) async {
     final snapshot = await FirebaseFirestore.instance.collection(colecao).get();
@@ -19,44 +49,25 @@ class HomeView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    const Color primaryColor = Color.fromARGB(255, 194, 131, 178);
-    const Color accentColor = Color(0xFFec407a);
-
     return Scaffold(
       appBar: AppBar(
         backgroundColor: primaryColor,
         title: Row(
           children: [
-            Icon(Icons.store_mall_directory, color: Colors.white),
+            const Icon(Icons.store_mall_directory, color: Colors.white),
             const SizedBox(width: 8),
-            Text(
+            const Text(
               'Senhorita Cintas Modeladores',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 22,
-              ),
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
             ),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.notifications_none, color: Colors.white),
-            onPressed: () {},
-          ),
-          IconButton(
-            icon: const Icon(Icons.account_circle, color: Colors.white),
-            onPressed: () {},
-          ),
-          IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
             onPressed: () async {
               await FirebaseAuth.instance.signOut();
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginView()),
-              );
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginView()));
             },
           ),
         ],
@@ -72,78 +83,39 @@ class HomeView extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.store, color: Colors.white, size: 48),
+                    const Icon(Icons.store, color: Colors.white, size: 48),
                     const SizedBox(height: 8),
                     Text(
-                      user?.email ?? 'Bem-vindo!',
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                    ),
-                  ],
+                  'Olá, ${nomeUsuario.toUpperCase()}',
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                   ],
                 ),
               ),
-              ListTile(
-                leading: Icon(Icons.dashboard, color: Colors.white),
-                title: const Text('Home', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const HomeView()),
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.attach_money, color: Colors.white),
-                title: const Text('Vender', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const VendasView()),
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.checkroom, color: Colors.white),
-                title: const Text('Produtos', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => ProdutosView()),
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.add_box, color: Colors.white),
-                title: const Text('Adicionar Produto', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const AdicionarProdutosView()),
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.people, color: Colors.white),
-                title: const Text('Clientes', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ClientesView()),
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.bar_chart, color: Colors.white),
-                title: const Text('Relatórios', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.settings, color: Colors.white),
-                title: const Text('Configurações', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ConfiguracoesView()),
-                  );
-                },
-              ),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.dashboard, 'Home', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                }),
+              _menuItem(Icons.attach_money, 'Vender', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+              }),
+              _menuItem(Icons.checkroom, 'Produtos', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+              }),
+              _menuItem(Icons.add_box, 'Adicionar Produto', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+              }),
+              _menuItem(Icons.people, 'Clientes', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+              }),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                }),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.settings, 'Configurações', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                }),
             ],
           ),
         ),
@@ -180,19 +152,11 @@ class HomeView extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 24),
-            Text('Últimos Produtos Cadastrados',
-              style: TextStyle(
-                  color: primaryColor,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18)),
+            Text('Últimos Produtos Cadastrados', style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18)),
             const SizedBox(height: 8),
             _productList(),
-            const SizedBox(height: 24),   
-            Text('Últimas Vendas',
-              style: TextStyle(
-                  color: primaryColor,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18)),
+            const SizedBox(height: 24),
+            Text('Últimas Vendas', style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18)),
             const SizedBox(height: 8),
             _salesList(),
             const SizedBox(height: 32),
@@ -208,6 +172,14 @@ class HomeView extends StatelessWidget {
     );
   }
 
+  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(title, style: const TextStyle(color: Colors.white)),
+      onTap: onTap,
+    );
+  }
+
   Widget _kpiCard(String label, String value, IconData icon, Color color) {
     return Expanded(
       child: Card(
@@ -219,21 +191,8 @@ class HomeView extends StatelessWidget {
             children: [
               Icon(icon, color: Colors.white, size: 32),
               const SizedBox(height: 8),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 20,
-                ),
-              ),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
-              ),
+              Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
+              Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14)),
             ],
           ),
         ),
@@ -243,15 +202,10 @@ class HomeView extends StatelessWidget {
 
   Widget _productList() {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('produtos')
-          .orderBy('dataCadastro', descending: true)
-          .limit(5)
-          .snapshots(),
+      stream: FirebaseFirestore.instance.collection('produtos').orderBy('dataCadastro', descending: true).limit(5).snapshots(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
         final docs = snapshot.data!.docs;
         if (docs.isEmpty) return const Text('Nenhum produto encontrado.');
 
@@ -277,15 +231,10 @@ class HomeView extends StatelessWidget {
 
   Widget _salesList() {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('vendas')
-          .orderBy('dataVenda', descending: true)
-          .limit(5)
-          .snapshots(),
+      stream: FirebaseFirestore.instance.collection('vendas').orderBy('dataVenda', descending: true).limit(5).snapshots(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
         final docs = snapshot.data!.docs;
         if (docs.isEmpty) return const Text('Nenhuma venda encontrada.');
 
@@ -298,11 +247,20 @@ class HomeView extends StatelessWidget {
             itemBuilder: (context, i) {
               final data = docs[i].data() as Map<String, dynamic>;
               final total = data['total'] ?? 0.0;
-              final dataVenda = data['dataVenda']?.toString().substring(0, 10) ?? '';
+              final dataVendaRaw = data['dataVenda'];
+
+              String dataFormatada = '';
+              if (dataVendaRaw != null) {
+                final dataVenda = DateTime.tryParse(dataVendaRaw.toString());
+                if (dataVenda != null) {
+                  dataFormatada = DateFormat('dd/MM/yyyy HH:mm').format(dataVenda);
+                }
+              }
+
               return ListTile(
                 leading: const Icon(Icons.attach_money, color: Colors.pink),
                 title: Text('Venda de R\$ ${total.toStringAsFixed(2)}'),
-                subtitle: Text('Data: $dataVenda'),
+                subtitle: Text('Data: $dataFormatada'),
               );
             },
           ),
