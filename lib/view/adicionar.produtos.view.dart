@@ -13,6 +13,7 @@ import 'package:senhorita/view/home.view.dart';
 import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
+import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 
 class AdicionarProdutosView extends StatefulWidget {
@@ -81,7 +82,6 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
 
   final categoriasSemTamanho = [
     'ACESSÓRIOS',
-    'JALECOS',
     'CHEIRO PARA AMBIENTE',
     'BOLSAS',
     'OUTROS'
@@ -176,8 +176,9 @@ Future<void> salvarProduto() async {
       'descricao': descricao,
       'cor': corSelecionada ?? '',
       'foto': fotoUrl ?? '',
-      'valorReal': _converterParaDouble(valorRealController.text),
-      'precoVenda': _converterParaDouble(precoVendaController.text),
+      if (tipoUsuario != 'funcionario')  // ⬅️ Condicional para não salvar valorReal
+        'valorReal': _converterParaDouble(valorRealController.text),
+      'precoVenda': _converterParaDouble(precoVendaController.text), // permanece obrigatório
       'categoria': categoria,
       'dataCadastro': FieldValue.serverTimestamp(),
       'horaCadastro': FieldValue.serverTimestamp(),
@@ -196,6 +197,7 @@ Future<void> salvarProduto() async {
         docRef.id.toLowerCase(),
       ],
     };
+
 
     await docRef.set(produtoAtualizado);
 
@@ -216,8 +218,24 @@ Future<void> salvarProduto() async {
     await estoqueRef.set(estoqueAtualizado, SetOptions(merge: true));
 
     Navigator.of(context).pop(); // fecha o loader
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Produto salvo com sucesso!')));
-    Navigator.pop(context);
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Sucesso'),
+        content: const Text('O produto foi salvo com sucesso.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context); // fecha o AlertDialog
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+
   } catch (e) {
     Navigator.of(context).pop(); // fecha o loader
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao salvar produto: $e')));
@@ -297,6 +315,9 @@ Future<void> salvarProduto() async {
                               _menuItem(Icons.people, 'Clientes', () {
                                 Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
                               }),
+                               _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
+                                }),
                               if (tipoUsuario == 'admin')
                                 _menuItem(Icons.bar_chart, 'Relatórios', () {
                                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
@@ -378,17 +399,23 @@ Future<void> salvarProduto() async {
                     onChanged: (value) {
                       setState(() => corSelecionada = value);
                     },
-                    validator: (v) => v == null || v.isEmpty ? 'Selecione uma cor' : null,
                   ),
-                  TextFormField(
-                    controller: valorRealController,
-                    decoration: const InputDecoration(labelText: 'Valor Real'),
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [MoneyInputFormatter(leadingSymbol: 'R\$')],
-                  ),
+                  if (tipoUsuario != 'funcionario') ...[
+                    TextFormField(
+                      controller: valorRealController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Valor Real (custo)'),
+                      inputFormatters: [MoneyInputFormatter(leadingSymbol: 'R\$')],
+                      validator: (value) {
+                        if (value == null || value.isEmpty) return 'Informe o valor real';
+                        return null;
+                      },
+                    ),
+                  ],
                   TextFormField(
                     controller: precoVendaController,
                     decoration: const InputDecoration(labelText: 'Preço de Venda'),
+                    validator: (v) => v == null || v.trim().isEmpty ? 'Informe um Preço ' : null,
                     keyboardType: TextInputType.number,
                     inputFormatters: [MoneyInputFormatter(leadingSymbol: 'R\$')],
                   ),

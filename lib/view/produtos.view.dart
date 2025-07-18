@@ -7,11 +7,14 @@ import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:barcode_widget/barcode_widget.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
-import 'package:senhorita/view/estoque.view.dart';
 import 'package:senhorita/view/home.view.dart';
 import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
+import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 class ProdutosView extends StatefulWidget {
   const ProdutosView({super.key});
@@ -67,15 +70,6 @@ Future<int> _buscarQuantidadeEstoque(String produtoId) async {
   return 0;
 }
 
-
-  void _abrirEstoqueProduto(BuildContext context, String produtoId) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => EstoqueView(produtoId: produtoId),
-      ),
-    );
-  }
 
   void _mostrarEtiquetaDialog(BuildContext context, DocumentSnapshot produto) {
     final data = produto.data() as Map<String, dynamic>;
@@ -142,14 +136,36 @@ Future<int> _buscarQuantidadeEstoque(String produtoId) async {
     );
   }
 
-  void _imprimirEtiqueta(Map<String, dynamic> data, String id, String? tamanhoSelecionado) {
-    debugPrint('--- ETIQUETA ---');
-    debugPrint('Nome: ${data['nome']}');
-    if (tamanhoSelecionado != null) debugPrint('Tamanho: $tamanhoSelecionado');
-    debugPrint('Preço: R\$ ${data['precoVenda']}');
-    debugPrint('ID: $id');
-    debugPrint('Código de Barras: ${data['codigoBarras']}');
-  }
+void _imprimirEtiqueta(Map<String, dynamic> data, String id, String? tamanhoSelecionado) async {
+  final doc = pw.Document();
+
+  final barcode = Barcode.code128();
+  final barcodeSvg = barcode.toSvg(data['codigoBarras'] ?? '', width: 200, height: 60);
+
+  doc.addPage(
+    pw.Page(
+      pageFormat: const PdfPageFormat(58 * PdfPageFormat.mm, 40 * PdfPageFormat.mm), // 58mm etiqueta
+      margin: const pw.EdgeInsets.all(4),
+      build: (pw.Context context) {
+        return pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(data['nome'] ?? 'Sem nome',
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+            if (tamanhoSelecionado != null)
+              pw.Text('Tamanho: $tamanhoSelecionado', style: const pw.TextStyle(fontSize: 9)),
+            pw.Text('Preço: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
+                style: const pw.TextStyle(fontSize: 9)),
+            pw.SizedBox(height: 4),
+            pw.SvgImage(svg: barcodeSvg),
+          ],
+        );
+      },
+    ),
+  );
+
+  await Printing.layoutPdf(onLayout: (format) async => doc.save());
+}
 
   Future<void> corrigirCampoAtivo() async {
   final produtos = await FirebaseFirestore.instance.collection('produtos').get();
@@ -292,6 +308,9 @@ Future<int> _buscarQuantidadeEstoque(String produtoId) async {
                         _menuItem(Icons.people, 'Clientes', () {
                           Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
                         }),
+                          _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
+                          }),                       
                         if (tipoUsuario == 'admin')
                           _menuItem(Icons.bar_chart, 'Relatórios', () {
                             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
@@ -362,17 +381,19 @@ Future<int> _buscarQuantidadeEstoque(String produtoId) async {
                   ],
                 ),
                 const Divider(),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    Text('Valor: R\$ ${data['valorReal']?.toStringAsFixed(2) ?? '-'}'),
-                    Text('Venda: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}'),
-                    Text('Quantidade total: ${data['quantidade'] ?? 0}'),
-                    if (tamanhos != null && tamanhos.isNotEmpty)
-                      ...tamanhos.entries.map((e) => Text('${e.key}: ${e.value}')),
-                  ],
-                ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      if (tipoUsuario == 'admin')
+                      Text('Valor Real: R\$ ${data['valorReal']?.toStringAsFixed(2) ?? '-'}'),
+                      Text('Preço Venda: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}'),
+                      Text('Quantidade total: ${data['quantidade'] ?? 0}'),
+                      if (tamanhos != null && tamanhos.isNotEmpty)
+                        ...tamanhos.entries.map((e) => Text('${e.key}: ${e.value}')),
+                    ],
+                  ),
+
                 const SizedBox(height: 12),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,

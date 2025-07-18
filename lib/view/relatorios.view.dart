@@ -151,6 +151,9 @@ class _RelatoriosViewState extends State<RelatoriosView> {
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
               }),
+              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
+               }),              
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.bar_chart, 'Relatórios', () {
                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));

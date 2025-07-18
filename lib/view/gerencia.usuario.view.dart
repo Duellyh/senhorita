@@ -4,6 +4,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:senhorita/view/adicionar.produtos.view.dart';
+import 'package:senhorita/view/clientes.view.dart';
+import 'package:senhorita/view/configuracoes.view.dart';
+import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/produtos.view.dart';
+import 'package:senhorita/view/relatorios.view.dart';
+import 'package:senhorita/view/vendas.realizadas.view.dart';
+import 'package:senhorita/view/vendas.view.dart';
 
 class GerenciarUsuariosView extends StatefulWidget {
   const GerenciarUsuariosView({super.key});
@@ -19,9 +27,12 @@ class _GerenciarUsuariosViewState extends State<GerenciarUsuariosView> {
   final cpfController = TextEditingController();
   final emailController = TextEditingController();
   final senhaController = TextEditingController();
-  String tipoUsuarioSelecionado = 'funcionario'; // valor padrão
-
-
+  String tipoUsuarioSelecionado = 'funcionario';
+  String tipoUsuario = '';
+  final user = FirebaseAuth.instance.currentUser;
+  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
+  final Color accentColor = const Color(0xFFec407a); 
+  String nomeUsuario = '';
   String? editandoId;
 
 void _preencherCampos(Map<String, dynamic> usuario, String id) {
@@ -36,6 +47,25 @@ void _preencherCampos(Map<String, dynamic> usuario, String id) {
   });
 }
 
+@override
+void initState() {
+  super.initState();
+  _carregarDadosUsuario();
+}
+
+Future<void> _carregarDadosUsuario() async {
+  final userId = FirebaseAuth.instance.currentUser?.uid;
+  if (userId != null) {
+    final doc = await FirebaseFirestore.instance.collection('usuarios').doc(userId).get();
+    if (doc.exists) {
+      final data = doc.data()!;
+      setState(() {
+        nomeUsuario = data['nomeUsuario'] ?? '';
+        tipoUsuario = data['tipo'] ?? 'funcionario';
+      });
+    }
+  }
+}
 
 Future<void> _salvarUsuario() async {
   if (!_formKey.currentState!.validate()) return;
@@ -129,6 +159,58 @@ Future<void> _salvarUsuario() async {
       appBar: AppBar(
         title: const Text('Gerenciar Usuários'),
         backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+      ),
+            drawer: Drawer(
+        child: Container(
+          color: primaryColor,
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              DrawerHeader(
+                decoration: BoxDecoration(color: accentColor),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.store, color: Colors.white, size: 48),
+                    const SizedBox(height: 8),
+                    Text(
+                  'Olá, ${nomeUsuario.toUpperCase()}',
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+
+                  ],
+                ),
+              ),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.dashboard, 'Home', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                }),
+              _menuItem(Icons.attach_money, 'Vender', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+              }),
+              _menuItem(Icons.checkroom, 'Produtos', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+              }),
+              _menuItem(Icons.add_box, 'Adicionar Produto', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+              }),
+              _menuItem(Icons.people, 'Clientes', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+              }),
+              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
+               }),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                }),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.settings, 'Configurações', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                }),
+            ],
+          ),
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -256,3 +338,11 @@ Future<void> _salvarUsuario() async {
     );
   }
 }
+  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(title, style: const TextStyle(color: Colors.white)),
+      onTap: onTap,
+    );
+  }
+

@@ -1,5 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:senhorita/view/adicionar.produtos.view.dart';
+import 'package:senhorita/view/clientes.view.dart';
+import 'package:senhorita/view/configuracoes.view.dart';
+import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/produtos.view.dart';
+import 'package:senhorita/view/relatorios.view.dart';
+import 'package:senhorita/view/vendas.realizadas.view.dart';
+import 'package:senhorita/view/vendas.view.dart';
 
 class ValoresRecebidosView extends StatefulWidget {
   const ValoresRecebidosView({super.key});
@@ -11,6 +20,11 @@ class ValoresRecebidosView extends StatefulWidget {
 class _RelatorioValoresViewState extends State<ValoresRecebidosView> {
   double totalGasto = 0;
   double totalRecebido = 0;
+  String tipoUsuario = '';
+  final user = FirebaseAuth.instance.currentUser;
+  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
+  final Color accentColor = const Color(0xFFec407a);
+  String nomeUsuario = '';
 
   @override
   Widget build(BuildContext context) {
@@ -19,6 +33,58 @@ class _RelatorioValoresViewState extends State<ValoresRecebidosView> {
         title: const Text('Relatório de Valores'),
         backgroundColor: const Color.fromARGB(255, 194, 131, 178),
         centerTitle: true,
+      ),
+            drawer: Drawer(
+        child: Container(
+          color: primaryColor,
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              DrawerHeader(
+                decoration: BoxDecoration(color: accentColor),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.store, color: Colors.white, size: 48),
+                    const SizedBox(height: 8),
+                    Text(
+                  'Olá, ${nomeUsuario.toUpperCase()}',
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+
+                  ],
+                ),
+              ),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.dashboard, 'Home', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                }),
+              _menuItem(Icons.attach_money, 'Vender', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+              }),
+              _menuItem(Icons.checkroom, 'Produtos', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+              }),
+              _menuItem(Icons.add_box, 'Adicionar Produto', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+              }),
+              _menuItem(Icons.people, 'Clientes', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+              }),
+              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
+               }),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                }),
+              if (tipoUsuario == 'admin')
+                _menuItem(Icons.settings, 'Configurações', () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                }),
+            ],
+          ),
+        ),
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
@@ -131,3 +197,10 @@ class _RelatorioValoresViewState extends State<ValoresRecebidosView> {
     );
   }
 }
+  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(title, style: const TextStyle(color: Colors.white)),
+      onTap: onTap,
+    );
+  }

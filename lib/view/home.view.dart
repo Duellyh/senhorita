@@ -9,6 +9,7 @@ import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
+import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 import 'login.view.dart';
 
@@ -108,6 +109,9 @@ class _HomeViewState extends State<HomeView> {
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
               }),
+              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
+               }),              
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.bar_chart, 'Relatórios', () {
                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));

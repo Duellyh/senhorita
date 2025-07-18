@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
@@ -11,6 +12,9 @@ import 'package:senhorita/view/home.view.dart';
 import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:senhorita/view/vendas.realizadas.view.dart';
 
 class VendasView extends StatefulWidget {
   const VendasView({super.key});
@@ -49,6 +53,12 @@ class _VendasViewState extends State<VendasView> {
   final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
+  String? formaPagamentoSelecionada;
+  double frete = 0.0;
+  double total = 0.0;
+
+
+
 
 
   @override
@@ -158,6 +168,140 @@ Future<void> buscarClientesDinamicamente(String termo) async {
     debugPrint('Erro ao buscar clientes dinamicamente: $e');
   }
 }
+Future<void> _mostrarResumoVendaDialog(double totalVenda, double totalPago) async {
+  final troco = (totalPago - totalVenda).clamp(0, double.infinity);
+  final nomeCliente = clienteNomeController.text.trim().isEmpty ? '---' : clienteNomeController.text.trim();
+  final valorFrete = freteController.text.trim().isEmpty ? 0.0 : _converterParaDouble(freteController.text.trim());
+
+  double totalDesconto = 0.0;
+  double totalPromocional = 0.0;
+  bool houvePromocao = false;
+
+  for (var item in itensVendidos) {
+    final desconto = item['desconto'] ?? 0.0;
+    final promocional = item['precoPromocional'] ?? 0.0;
+    final quantidade = item['quantidade'] ?? 1;
+
+    if (desconto > 0) {
+      totalDesconto += desconto * quantidade;
+    }
+
+    if (promocional > 0) {
+      final precoOriginal = item['preco'] ?? 0.0;
+      totalPromocional += (precoOriginal - promocional) * quantidade;
+      houvePromocao = true;
+    }
+  }
+
+  await showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => AlertDialog(
+      title: const Text('✅ Venda Concluída'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('👤 Cliente: $nomeCliente'),
+          Text('🚚 Frete: R\$ ${valorFrete.toStringAsFixed(2)}'),
+          Text('💰 Total: R\$ ${totalVenda.toStringAsFixed(2)}'),
+          if (totalDesconto > 0)
+            Text('🔻 Descontos: R\$ ${totalDesconto.toStringAsFixed(2)}'),
+          if (houvePromocao)
+            Text('🔥 Promoções: R\$ ${totalPromocional.toStringAsFixed(2)}'),
+          Text('💳 Pago: R\$ ${totalPago.toStringAsFixed(2)}'),
+          Text('💵 Troco: R\$ ${troco.toStringAsFixed(2)}'),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.pop(context);
+            _imprimirNota();
+          },
+          child: const Text('🖨️ Imprimir Nota'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('❌ Não Imprimir'),
+        ),
+      ],
+    ),
+  );
+}
+
+
+
+void _imprimirNota() {
+  final pdf = pw.Document();
+
+  final valorFrete = frete;
+  final valorTotal = _calcularTotalGeral();
+  final formasPagamento = pagamentos.map((p) => p['forma']).join(", ");
+
+  pdf.addPage(
+    pw.Page(
+      build: (context) {
+        return pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text("SENHORITA CINTAS", style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 4),
+            pw.Text("COMPROVANTE PAGAMENTO", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 4),
+            pw.Text("Atendente: $nomeUsuario"),
+            pw.Text("Cliente: ${clienteNomeController.text.isNotEmpty ? clienteNomeController.text : 'CONSUMIDOR'}"),
+            pw.Text("Data: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}"),
+            pw.SizedBox(height: 10),
+            pw.Text("Itens:", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+            pw.Divider(),
+
+            ...itensVendidos.map((item) {
+              final nome = item['produtoNome'] ?? '';
+              final tamanho = item['tamanho'] ?? '';
+              final qtd = item['quantidade'] ?? 0;
+              final preco = item['precoFinal'] ?? 0.0;
+              final precoPromocional = item['precoPromocional'] ?? 0.0;
+              final desconto = item['desconto'] ?? 0.0;
+
+              final precoTotal = preco * qtd;
+
+              // Verifica se tem desconto ou promoção
+              final temPromocao = precoPromocional > 0 && precoPromocional < preco;
+              final temDesconto = desconto > 0;
+
+              final precoUnitarioTexto = temPromocao
+                  ? "R\$ ${precoPromocional.toStringAsFixed(2)} (Promoção)"
+                  : temDesconto
+                      ? "R\$ ${preco.toStringAsFixed(2)} (-R\$ ${desconto.toStringAsFixed(2)})"
+                      : "R\$ ${preco.toStringAsFixed(2)}";
+
+              return pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text("$nome ${tamanho.isNotEmpty ? '($tamanho)' : ''}"),
+                  pw.Text("Qtd: $qtd x $precoUnitarioTexto = R\$ ${precoTotal.toStringAsFixed(2)}"),
+                  pw.SizedBox(height: 4),
+                ],
+              );
+            }),
+
+            pw.Divider(),
+            if (valorFrete > 0) pw.Text("Frete: R\$ ${valorFrete.toStringAsFixed(2)}"),
+            pw.Text("Forma de Pagamento: ${formasPagamento.isNotEmpty ? formasPagamento : 'Não informado'}"),
+            pw.Text("Total: R\$ ${(valorTotal + valorFrete).toStringAsFixed(2)}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 10),
+            pw.Text("Obrigada pela preferência!", style: pw.TextStyle(fontSize: 12)),
+          ],
+        );
+      },
+    ),
+  );
+
+  Printing.layoutPdf(onLayout: (format) => pdf.save());
+}
+
+
 
 void adicionarProdutoAtual() {
   if (_formKey.currentState!.validate() && produtoEncontrado != null) {
@@ -201,21 +345,6 @@ void adicionarProdutoAtual() {
     });
   }
 }
-void _imprimirNotaPagamento() {
-  // Aqui você integraria com a impressora térmica real
-  debugPrint('🖨️ Imprimindo Nota de Pagamento...');
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text('Nota de pagamento enviada para impressão.')),
-  );
-}
-
-void _imprimirNotaFiscal() {
-  // Aqui você integraria com a impressora térmica real
-  debugPrint('🖨️ Imprimindo Nota Fiscal...');
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text('Nota fiscal enviada para impressão.')),
-  );
-}
 
 
 Future<void> realizarVenda() async {
@@ -243,8 +372,7 @@ Future<void> realizarVenda() async {
 
   try {
     final vendaRef = await firestore.collection('vendas').add({
-      'dataVenda': DateTime.now().toIso8601String(),
-      'horaVenda': DateTime.now().toIso8601String(),
+      'dataVenda': DateTime.now(),
       'totalVenda': totalVenda,
       'tipoNota': tipoNotaSelecionada,
       'itens': itensVendidos,
@@ -256,6 +384,10 @@ Future<void> realizarVenda() async {
       'cliente': clienteNomeController.text.trim().isNotEmpty? {
         'nome': clienteNomeController.text.trim(),
         'telefone': clienteTelefoneController.text.trim(),}: null,
+      'clienteId': clienteSelecionado?['id'],
+      'nomeUsuario': nomeUsuario,
+      'usuarioId': FirebaseAuth.instance.currentUser?.uid,
+      'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
 
     });
 
@@ -352,12 +484,15 @@ Future<void> realizarVenda() async {
           'quantidade': quantidadeVendida,
           'tamanho': tamanho,
           'precoFinal': item['precoFinal'] ?? 0.0,
-          'dataVenda': DateTime.now().toIso8601String(),
+          'dataVenda': DateTime.now(), 
           'horaVenda': DateTime.now().toIso8601String(),
           'vendaId': vendaRef.id,
           'detalhesProduto': produtoData,
           'desconto': item['desconto'] ?? 0.0,
           'precoPromocional': item['precoPromocional'] ?? 0.0,
+          'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
+          'usuarioId': FirebaseAuth.instance.currentUser?.uid,
+
         });
       }
     }
@@ -382,30 +517,7 @@ Future<void> realizarVenda() async {
 
 
     // Chamar impressão conforme tipo de nota
-        if (tipoNotaSelecionada == 'pagamento') {
-          _imprimirNotaPagamento();
-        } else if (tipoNotaSelecionada == 'fiscal') {
-          _imprimirNotaFiscal();
-        }
-
-
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('✅ Venda registrada!'),
-        content: Text(
-          'Total: R\$ ${totalVenda.toStringAsFixed(2)}\n'
-          'Pago: R\$ ${totalPago.toStringAsFixed(2)}\n'
-          'Troco: R\$ ${(totalPago - totalVenda).clamp(0, double.infinity).toStringAsFixed(2)}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Fechar'),
-          ),
-        ],
-      ),
-    );
+await _mostrarResumoVendaDialog(totalVenda, totalPago);
 
     setState(() {
       itensVendidos.clear();
@@ -499,6 +611,9 @@ Widget build(BuildContext context) {
                     _menuItem(Icons.people, 'Clientes', () {
                       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
                     }),
+                    _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
+                    }),                    
                     if (tipoUsuario == 'admin')
                       _menuItem(Icons.bar_chart, 'Relatórios', () {
                         Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
@@ -537,7 +652,20 @@ Widget build(BuildContext context) {
                       buscarProdutosSugestoes(value.trim());
                     });
                   },
+                  onFieldSubmitted: (value) async {
+                    FocusScope.of(context).unfocus(); // <- remove o foco do campo
+                    await buscarProdutosSugestoes(value.trim());
+                    if (sugestoesProdutos.isNotEmpty) {
+                      final produto = sugestoesProdutos.first;
+                      setState(() {
+                        produtoEncontrado = produto;
+                        buscaController.text = produto['nome'];
+                        sugestoesProdutos = [];
+                      });
+                    }
+                  },
                 ),
+
                 if (sugestoesProdutos.isNotEmpty)
                   ...sugestoesProdutos.map((produto) => Card(
                     margin: const EdgeInsets.symmetric(vertical: 4),

@@ -333,6 +333,8 @@ void _redefinirSenha() {
                               style: const TextStyle(color: Colors.black),
                               textInputAction: TextInputAction.done,
                               textAlign: TextAlign.left,
+                              onSubmitted: (_) => _fazerLogin(),
+                              
                             ),
                             const SizedBox(height: 24),
                             SizedBox(
