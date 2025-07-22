@@ -69,6 +69,66 @@ class _LoginViewState extends State<LoginView> {
     );
   }
 
+Future<void> _selecionarLoja(DocumentSnapshot usuarioDoc) async {
+  String? lojaSelecionada = await showDialog<String>(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) {
+      String? selecionado;
+      return AlertDialog(
+        title: const Text('Selecione a loja'),
+        content: StatefulBuilder(
+          builder: (context, setState) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RadioListTile<String>(
+                  title: const Text('Senhorita Modeladores (Matriz)'),
+                  value: 'Senhorita Modeladores (Matriz)',
+                  groupValue: selecionado,
+                  onChanged: (value) {
+                    setState(() {
+                      selecionado = value;
+                    });
+                  },
+                ),
+                RadioListTile<String>(
+                  title: const Text('Senhorita Jalecos (Filial)'),
+                  value: 'Senhorita Jalecos (Filial)',
+                  groupValue: selecionado,
+                  onChanged: (value) {
+                    setState(() {
+                      selecionado = value;
+                    });
+                  },
+                ),
+              ],
+            );
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (selecionado != null) {
+                Navigator.of(context).pop(selecionado);
+              }
+            },
+            child: const Text('Confirmar'),
+          ),
+        ],
+      );
+    },
+  );
+
+  if (lojaSelecionada != null) {
+    // Atualiza a loja selecionada no usuário logado
+    await FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(usuarioDoc.id)
+        .update({'lojaSelecionada': lojaSelecionada});
+  }
+}
+
 void _fazerLogin() async {
   final entrada = _usuarioController.text.trim().toLowerCase();
   final senha = _senhaController.text;
@@ -141,6 +201,7 @@ void _fazerLogin() async {
     final tipoUsuario = usuarioDoc['tipo'];
 
     Navigator.of(context).pop(); // Fecha loading
+    await _selecionarLoja(usuarioDoc);
 
     if (tipoUsuario == 'admin') {
       Navigator.pushReplacement(

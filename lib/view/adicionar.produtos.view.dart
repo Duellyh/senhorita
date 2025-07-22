@@ -1,5 +1,3 @@
-// ignore_for_file: use_build_context_synchronously, deprecated_member_use
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -40,6 +38,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
   final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
+  String? lojaSelecionada;
+  List<String> lojas = ['Senhorita Modeladores (Matriz)', 'Senhorita Jalecos (Filial)']; // Coloque aqui os nomes das lojas disponíveis
+
 
 
   Future<void> buscarTipoUsuario() async {
@@ -63,6 +64,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'ROXO': Colors.purple,
     'CINZA': Colors.grey,
     'BEGE': const Color(0xFFF5F5DC),
+    'ESTAMPA': const Color(0xFFD8BFD8),
     
   };
 
@@ -71,9 +73,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'MODELADORES',
     'PÓS-CIRÚRGICO',
     'BOLSAS',
-    'LINGERIE',
     'CHEIRO PARA AMBIENTE',
     'CINTAS MODELADORES',
+    'MODA ÍNTIMAS',
     'MODA PRAIA',
     'ACESSÓRIOS',
     'JALECOS',
@@ -175,6 +177,7 @@ Future<void> salvarProduto() async {
       'nome': nome,
       'descricao': descricao,
       'cor': corSelecionada ?? '',
+      'loja': lojaSelecionada,
       'foto': fotoUrl ?? '',
       if (tipoUsuario != 'funcionario')  // ⬅️ Condicional para não salvar valorReal
         'valorReal': _converterParaDouble(valorRealController.text),
@@ -373,6 +376,7 @@ Future<void> salvarProduto() async {
                     onChanged: (v) => setState(() => categoriaSelecionada = v),
                     validator: (v) => v == null || v.isEmpty ? 'Selecione uma categoria' : null,
                   ),
+
                   DropdownButtonFormField<String>(
                     value: corSelecionada,
                     decoration: const InputDecoration(labelText: 'Cor'),
@@ -400,22 +404,26 @@ Future<void> salvarProduto() async {
                       setState(() => corSelecionada = value);
                     },
                   ),
+                  DropdownButtonFormField<String>(
+                    value: lojaSelecionada,
+                    decoration: const InputDecoration(labelText: 'Loja'),
+                    items: lojas
+                        .map((loja) => DropdownMenuItem(value: loja, child: Text(loja)))
+                        .toList(),
+                    onChanged: (v) => setState(() => lojaSelecionada = v),
+                  ),
                   if (tipoUsuario != 'funcionario') ...[
                     TextFormField(
                       controller: valorRealController,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: 'Valor Real (custo)'),
                       inputFormatters: [MoneyInputFormatter(leadingSymbol: 'R\$')],
-                      validator: (value) {
-                        if (value == null || value.isEmpty) return 'Informe o valor real';
-                        return null;
-                      },
+
                     ),
                   ],
                   TextFormField(
                     controller: precoVendaController,
                     decoration: const InputDecoration(labelText: 'Preço de Venda'),
-                    validator: (v) => v == null || v.trim().isEmpty ? 'Informe um Preço ' : null,
                     keyboardType: TextInputType.number,
                     inputFormatters: [MoneyInputFormatter(leadingSymbol: 'R\$')],
                   ),
@@ -480,12 +488,6 @@ Future<void> salvarProduto() async {
                   controller: quantidadeController,
                   decoration: const InputDecoration(labelText: 'Quantidade'),
                   keyboardType: TextInputType.number,
-                  validator: (v) {
-                    if ((v == null || v.trim().isEmpty)) {
-                      return 'Informe a quantidade';
-                    }
-                    return null;
-                  },
                 ),
               ),
             )

@@ -341,6 +341,14 @@ void _imprimirEtiqueta(Map<String, dynamic> data, String id, String? tamanhoSele
                       final produto = produtos[index];
                       final data = produto.data() as Map<String, dynamic>;
                       final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
+                      bool estoqueBaixo = false;
+                    if (tamanhos == null || tamanhos.isEmpty) {
+                      final quantidade = data['quantidade'] ?? 0;
+                      estoqueBaixo = quantidade <= 3;
+                    } else {
+                      estoqueBaixo = tamanhos.values.any((qtd) => qtd is int && qtd <= 2);
+                    }
+
 
                       return Card(
                         elevation: 2,
@@ -364,89 +372,107 @@ void _imprimirEtiqueta(Map<String, dynamic> data, String id, String? tamanhoSele
                                           ),
                                         )
                         : const Icon(Icons.image, size: 60),
-                    const SizedBox(width: 12),
-                    Expanded(
+                          const SizedBox(width: 12),
+                          Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(data['nome'] ?? 'Sem nome',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                            Text(
+                              data['nome'] ?? 'Sem nome',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: estoqueBaixo ? Colors.red : Colors.black,
+                              ),
+                            ),
                           const SizedBox(height: 4),
                           Text('ID: ${produto.id}', style: const TextStyle(fontSize: 12)),
                           Text('Categoria: ${data['categoria'] ?? '-'}', style: const TextStyle(fontSize: 12)),
                           Text('Cor: ${data['cor'] ?? '-'}', style: const TextStyle(fontSize: 12)),
+                          Text('Loja: ${data['loja'] ?? '-'}', style: const TextStyle(fontSize: 12)),
+
                         ],
-                      ),
-                    ),
-                  ],
-                ),
-                const Divider(),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
+                        ),
+                            ),
+                          ],
+                        ),
+                        const Divider(),
+                          Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: [
                       if (tipoUsuario == 'admin')
                       Text('Valor Real: R\$ ${data['valorReal']?.toStringAsFixed(2) ?? '-'}'),
                       Text('Preço Venda: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}'),
-                      Text('Quantidade total: ${data['quantidade'] ?? 0}'),
+                      Text(
+                            'Quantidade total: ${data['quantidade'] ?? 0}',
+                            style: TextStyle(color: estoqueBaixo ? Colors.red : Colors.black),
+                          ),
+
                       if (tamanhos != null && tamanhos.isNotEmpty)
                         ...tamanhos.entries.map((e) => Text('${e.key}: ${e.value}')),
-                    ],
-                  ),
+                            if (estoqueBaixo)
+                              Icon(
+                                Icons.warning,
+                                color: Colors.red,
+                                size: 20,
+                              ),
+                          ],
+                        ),
 
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
+                      const SizedBox(height: 12),
+                      Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
                         backgroundColor: primaryColor,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      icon: const Icon(Icons.edit),
-                      label: const Text('Editar'),
-                      onPressed: () => _editarProduto(context, produto),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.redAccent,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      icon: const Icon(Icons.delete),
-                      label: const Text('Excluir'),
-                      onPressed: () => _excluirProduto(context, produto.id, data['nome']),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: accentColor,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      icon: const Icon(Icons.print),
-                      label: const Text('Etiqueta'),
-                      onPressed: () => _mostrarEtiquetaDialog(context, produto),
-                    ),
-                  ],
-                )
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  },
-),
+                              ),
+                              icon: const Icon(Icons.edit),
+                              label: const Text('Editar'),
+                              onPressed: () => _editarProduto(context, produto),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.redAccent,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              icon: const Icon(Icons.delete),
+                              label: const Text('Excluir'),
+                              onPressed: () => _excluirProduto(context, produto.id, data['nome']),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: accentColor,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              icon: const Icon(Icons.print),
+                              label: const Text('Etiqueta'),
+                              onPressed: () => _mostrarEtiquetaDialog(context, produto),
+                                    ),
+                                  ],
+                                )
+                              ],
+                                  ),
+                                ),
+                              );
+                          },
+                        );
+                      },
+                            ),
 
-    );
-  }
-}
+                          );
+                        }
+                   }
   Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
     return ListTile(
       leading: Icon(icon, color: Colors.white),

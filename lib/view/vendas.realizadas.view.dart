@@ -1,4 +1,3 @@
-// ignore_for_file: unnecessary_to_list_in_spreads
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -11,6 +10,7 @@ import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
@@ -195,11 +195,17 @@ void _imprimirNotaVenda(Map<String, dynamic> venda) {
                 pw.Divider(),
               ],
             );
-          }).toList(),
+          }),
           pw.SizedBox(height: 10),
           pw.Text("Frete: R\$ ${frete.toStringAsFixed(2)}"),
+          pw.Text("Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}",
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),              
+          pw.Text("Total com Frete: R\$ ${(total + frete).toStringAsFixed(2)}",
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Text("Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}"),
+          pw.Text("Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}"),
+          pw.SizedBox(height: 10),
           pw.Text("Forma de Pagamento: $formasPagamento"),
-          pw.Text("Total: R\$ ${total.toStringAsFixed(2)}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 10),
           pw.Text("Obrigada pela preferência!", style: pw.TextStyle(fontSize: 12)),
         ],
@@ -255,11 +261,17 @@ void _mostrarDetalhesVenda(Map<String, dynamic> venda) {
               }),
               const SizedBox(height: 10),
               Text('Frete: R\$ ${venda['frete']?.toStringAsFixed(2) ?? '0.00'}'),
-              Text('Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}'),
+
+              Text('Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}'
+                  , style: const TextStyle(fontWeight: FontWeight.bold) ),
+              Text(
+                'Total com Frete: R\$ ${((venda['totalVenda'] ?? 0.0) + (venda['frete'] ?? 0.0)).toStringAsFixed(2)}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text('Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}'),              
               Text('Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}'),
               Text('Forma de Pagamento: ${(venda['formasPagamento'] as List<dynamic>).join(" / ")}'),
-              Text('Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+
             ],
           ),
         ),
@@ -286,28 +298,21 @@ void _mostrarDetalhesVenda(Map<String, dynamic> venda) {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Vendas Realizadas', style: TextStyle(color: Colors.white)),
-        backgroundColor: primaryColor,
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          DropdownButton<String>(
-            value: filtroSelecionado,
-            dropdownColor: Colors.white,
-            underline: const SizedBox(),
-            icon: const Icon(Icons.filter_list, color: Colors.white),
-            items: filtros.map((f) => DropdownMenuItem(value: f, child: Text(f.toUpperCase()))).toList(),
-            onChanged: (value) async {
-              if (value != null) {
-                if (value == 'personalizado') {
-                  await _selecionarIntervaloDatas();
-                }
-                setState(() => filtroSelecionado = value);
-              }
-            },
-          ),
-        ],
-      ),
+                appBar: AppBar(
+                  backgroundColor: primaryColor,
+                  title: const Text('Vendas Realizadas', style: TextStyle(color: Colors.white)),
+                  iconTheme: const IconThemeData(color: Colors.white),
+                  elevation: 0,
+                          actions: [
+                          IconButton(
+                            icon: const Icon(Icons.logout, color: Colors.white),
+                            onPressed: () async {
+                              await FirebaseAuth.instance.signOut();
+                              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginView()));
+                            },
+                          ),
+                        ],
+                ),
             drawer: Drawer(
               child: Container(
                 color: primaryColor,
@@ -361,45 +366,96 @@ void _mostrarDetalhesVenda(Map<String, dynamic> venda) {
             ),
               body: carregandoUsuario
                   ? const Center(child: CircularProgressIndicator())
-                  : StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-  stream: _getVendasStream(),
-  builder: (context, snapshot) {
-    if (snapshot.connectionState == ConnectionState.waiting) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (!snapshot.hasData || snapshot.data!.isEmpty) {
-      return const Center(child: Text('Nenhuma venda encontrada.'));
-    }
+                  : Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          color: Colors.grey[100],
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: filtros.map((filtro) {
+                              final isSelecionado = filtroSelecionado == filtro;
+                              return ChoiceChip(
+                                label: Text(
+                                  filtro == 'personalizado'
+                                      ? 'Personalizado'
+                                      : filtro[0].toUpperCase() + filtro.substring(1),
+                                  style: TextStyle(
+                                    color: isSelecionado ? Colors.white : Colors.black,
+                                  ),
+                                ),
+                                selected: isSelecionado,
+                                selectedColor: primaryColor,
+                                onSelected: (selected) async {
+                                  if (selected) {
+                                    if (filtro == 'personalizado') {
+                                      await _selecionarIntervaloDatas();
+                                    }
+                                    setState(() => filtroSelecionado = filtro);
+                                  }
+                                },
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                        if (filtroSelecionado == 'personalizado' && intervaloPersonalizado != null)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.date_range, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.start)} até ${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.end)}',
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                              ],
+                            ),
+                          ),
+                        Expanded(
+                          child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                            stream: _getVendasStream(),
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState == ConnectionState.waiting) {
+                                return const Center(child: CircularProgressIndicator());
+                              }
+                              if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                                return const Center(child: Text('Nenhuma venda encontrada.'));
+                              }
 
-    final vendas = snapshot.data!;
+                              final vendas = snapshot.data!;
 
-    return ListView.builder(
-      itemCount: vendas.length,
-      itemBuilder: (context, index) {
-        final venda = vendas[index].data();
-        final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
-        final cliente = venda['cliente']?['nome'] ?? 'Cliente não informado';
+                              return ListView.builder(
+                                itemCount: vendas.length,
+                                itemBuilder: (context, index) {
+                                  final venda = vendas[index].data();
+                                  final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
+                                  final cliente = venda['cliente']?['nome'] ?? 'Cliente não informado';
 
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: ListTile(
-            title: Text(
-              'Venda - R\$ ${venda['totalVenda'].toStringAsFixed(2)}',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              '$cliente - ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}',
-            ),
-            onTap: () {
-              _mostrarDetalhesVenda(venda);
-            },
-          ),
-        );
+                                  return Card(
+                                    margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    child: ListTile(
+                                      title: Text(
+                                        'Venda - R\$ ${venda['totalVenda'].toStringAsFixed(2)}',
+                                        style: const TextStyle(fontWeight: FontWeight.bold),
+                                      ),
+                                      subtitle: Text(
+                                        '$cliente - ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}',
+                                      ),
+                                      onTap: () {
+                                        _mostrarDetalhesVenda(venda);
+                                      },
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
 
-      },
-    );
-  },
-)
 
 
 

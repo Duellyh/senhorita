@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
+import 'package:senhorita/view/estoque.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
@@ -47,6 +48,32 @@ class _HomeViewState extends State<HomeView> {
     final snapshot = await FirebaseFirestore.instance.collection(colecao).get();
     return snapshot.docs.length;
   }
+
+  Future<int> contarProdutosComEstoqueBaixo() async {
+  final snapshot = await FirebaseFirestore.instance.collection('produtos').get();
+
+  int contador = 0;
+
+  for (var doc in snapshot.docs) {
+    final data = doc.data();
+    final quantidade = data['quantidade'] ?? 0;
+    final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
+
+    // Produto sem tamanho
+    if ((tamanhos == null || tamanhos.isEmpty) && quantidade <= 3) {
+      contador++;
+    }
+
+    // Produto com tamanhos
+    if (tamanhos != null && tamanhos.isNotEmpty) {
+      final hasBaixo = tamanhos.values.any((qtd) => qtd is int && qtd <= 2);
+      if (hasBaixo) contador++;
+    }
+  }
+
+  return contador;
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -129,32 +156,91 @@ class _HomeViewState extends State<HomeView> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                FutureBuilder<int>(
-                  future: _contarDocumentos('produtos'),
-                  builder: (context, snapshot) {
-                    final total = snapshot.data?.toString() ?? '...';
-                    return _kpiCard('Produtos', total, Icons.checkroom, primaryColor);
-                  },
+                            Row(
+                  children: [
+                    Expanded(
+                 child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => ProdutosView()),
+                            );
+                          },
+                      child: FutureBuilder<int>(
+                        future: _contarDocumentos('produtos'),
+                        builder: (context, snapshot) {
+                          final total = snapshot.data?.toString() ?? '...';
+                          return _kpiCard('Produtos', total, Icons.checkroom, primaryColor);
+                        },
+                      ),
+                    ),
+                                      ),
+                    ),
+                    Expanded(
+                        child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => VendasRealizadasView()),
+                            );
+                          },
+                      child: FutureBuilder<int>(
+                        future: _contarDocumentos('vendas'),
+                        builder: (context, snapshot) {
+                          final total = snapshot.data?.toString() ?? '...';
+                          return _kpiCard('Vendas', total, Icons.attach_money, accentColor);
+                        },
+                      ),
+                    ),
+                                            ),
+                      ),
+                    Expanded(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => ClientesView()),
+                            );
+                          },
+                          child: FutureBuilder<int>(
+                            future: _contarDocumentos('clientes'),
+                            builder: (context, snapshot) {
+                              final total = snapshot.data?.toString() ?? '...';
+                              return _kpiCard('Clientes', total, Icons.people, primaryColor);
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                                        Expanded(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => EstoqueView()),
+                            );
+                          },
+                          child: FutureBuilder<int>(
+                            future: contarProdutosComEstoqueBaixo(),
+                            builder: (context, snapshot) {
+                              final total = snapshot.data?.toString() ?? '...';
+                              return _kpiCard('Produtos com Estoque baixo', total, Icons.inventory, accentColor);
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                FutureBuilder<int>(
-                  future: _contarDocumentos('vendas'),
-                  builder: (context, snapshot) {
-                    final total = snapshot.data?.toString() ?? '...';
-                    return _kpiCard('Vendas', total, Icons.attach_money, accentColor);
-                  },
-                ),
-                FutureBuilder<int>(
-                  future: _contarDocumentos('clientes'),
-                  builder: (context, snapshot) {
-                    final total = snapshot.data?.toString() ?? '...';
-                    return _kpiCard('Clientes', total, Icons.people, primaryColor);
-                  },
-                ),
-              ],
-            ),
+
             const SizedBox(height: 24),
             Text('Últimos Produtos Cadastrados', style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18)),
             const SizedBox(height: 8),

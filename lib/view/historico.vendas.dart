@@ -8,10 +8,15 @@ import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/home.view.dart';
+import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+
 
 class HistoricoVendasView extends StatefulWidget {
   const HistoricoVendasView({super.key});
@@ -24,8 +29,6 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
   String filtroSelecionado = 'dia';
   DateTimeRange? intervaloPersonalizado;
   final List<String> filtros = ['dia', 'semana', 'mes', 'ano', 'personalizado'];
-  List<String> usuarios = [];
-  List<String> formasPagamento = [];
   String? filtroUsuario;
   String? filtroFormaPagamento;
   String tipoUsuario = '';
@@ -33,10 +36,24 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
   final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
+  bool carregandoUsuario = true;
+  String? usuarioSelecionado;
+  String? formaPagamentoSelecionada;
+
+  List<String> usuarios = []; // preenchido do Firestore
+  List<String> formasPagamento = ['Dinheiro', 'Pix', 'Cartão Crédito', 'Cartão Débito'];
 
 
-
-
+  Future<void> buscarTipoUsuario() async {
+    if (user != null) {
+      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      setState(() {
+        tipoUsuario = doc['tipo'] ?? 'funcionario';
+        nomeUsuario = doc['nome'] ?? '';
+        carregandoUsuario = false;
+      });
+    }
+  }
   DateTime _getDataInicial() {
     final agora = DateTime.now();
     switch (filtroSelecionado) {
@@ -52,34 +69,143 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
         return DateTime(agora.year, agora.month, agora.day);
     }
   }
+  void _mostrarDetalhesVenda(Map<String, dynamic> venda) {
+  final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
+  final cliente = venda['cliente']?['nome'] ?? 'Não informado';
+  final telefone = venda['cliente']?['telefone'] ?? '';
+  final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
 
+  showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Detalhes da Venda'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Cliente: $cliente'),
+              if (telefone.isNotEmpty) Text('Telefone: $telefone'),
+              Text('Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}'),
+              const SizedBox(height: 10),
+              const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Divider(),
+              ...itens.map((item) {
+                final precoFinal = item['precoFinal'] ?? 0.0;
+                final quantidade = item['quantidade'] ?? 1;
+                final desconto = item['desconto'];
+                final precoPromocional = item['precoPromocional'];
+                final totalItem = precoFinal * quantidade;
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${item['produtoNome'] ?? 'Produto'}'
+                        ' ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}'),
+                    Text('Quantidade: $quantidade | Unitário: R\$ ${precoFinal.toStringAsFixed(2)}'
+                        '${desconto != null ? ' | Desconto: R\$ ${desconto.toStringAsFixed(2)}' : ''}'
+                        '${precoPromocional != null && precoPromocional > 0 ? ' | Promo: R\$ ${precoPromocional.toStringAsFixed(2)}' : ''}'),
+                    Text('Subtotal: R\$ ${totalItem.toStringAsFixed(2)}'),
+                    const Divider(),
+                  ],
+                );
+              }),
+              const SizedBox(height: 10),
+              Text('Frete: R\$ ${venda['frete']?.toStringAsFixed(2) ?? '0.00'}'),
+
+              Text('Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}'
+                  , style: const TextStyle(fontWeight: FontWeight.bold) ),
+              Text(
+                'Total com Frete: R\$ ${((venda['totalVenda'] ?? 0.0) + (venda['frete'] ?? 0.0)).toStringAsFixed(2)}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text('Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}'),              
+              Text('Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}'),
+              Text('Forma de Pagamento: ${(venda['formasPagamento'] as List<dynamic>).join(" / ")}'),
+
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Voltar'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pop(context);
+            _imprimirNotaVenda(venda); // Chama a impressão
+          },
+          child: const Text('Imprimir 2ª Via'),
+        ),
+      ],
+    ),
+  );
+}
+
+Stream<List<DocumentSnapshot>> _getVendasStream() {
+  return FirebaseFirestore.instance
+      .collection('vendas')
+      .orderBy('dataVenda', descending: true)
+      .snapshots()
+      .map((snapshot) {
+    final docsFiltrados = snapshot.docs.where((doc) {
+      final data = doc.data();
+
+      // Filtro por nomeUsuario
+      if (usuarioSelecionado != null &&
+          (data['nomeUsuario']?.toString().toLowerCase() !=
+              usuarioSelecionado!.toLowerCase())) {
+        return false;
+      }
+
+      // Filtro por forma de pagamento
+      if (formaPagamentoSelecionada != null) {
+        final pagamentos = (data['pagamentos'] as List?)
+            ?.map((e) => e['forma']?.toString())
+            .toList();
+
+        if (pagamentos == null ||
+            !pagamentos.contains(formaPagamentoSelecionada)) {
+          return false;
+        }
+      }
+
+      return true;
+    }).toList();
+
+    return docsFiltrados;
+  });
+}
+
+
+  Future<void> _selecionarIntervaloDatas() async {
+    final hoje = DateTime.now();
+    final intervalo = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime(hoje.year, hoje.month, hoje.day + 1),
+      initialDateRange: intervaloPersonalizado ??
+          DateTimeRange(
+            start: DateTime(hoje.year, hoje.month, hoje.day),
+            end: DateTime(hoje.year, hoje.month, hoje.day),
+          ),
+    );
+
+    if (intervalo != null) {
+      setState(() {
+        intervaloPersonalizado = intervalo;
+      });
+    }
+  }
   DateTime _getDataFinal() {
     final agora = DateTime.now();
     return filtroSelecionado == 'personalizado'
         ? intervaloPersonalizado?.end ?? agora
         : agora;
   }
-Stream<QuerySnapshot> _getVendasFiltradas() {
-  final dataInicial = _getDataInicial();
-  final dataFinal = _getDataFinal();
-
-  Query query = FirebaseFirestore.instance
-      .collection('vendas')
-      .where('dataVenda', isGreaterThanOrEqualTo: dataInicial.toIso8601String())
-      .where('dataVenda', isLessThanOrEqualTo: dataFinal.toIso8601String());
-
-  if (filtroUsuario != null) {
-    query = query.where('nomeUsuario', isEqualTo: filtroUsuario);
-  }
-
-  if (filtroFormaPagamento != null) {
-    query = query.where('formasPagamento', arrayContains: filtroFormaPagamento);
-  }
-
-
-  return query.orderBy('dataVenda', descending: true).snapshots();
-}
-
 
   Future<void> _selecionarIntervaloPersonalizado() async {
     DateTime dataInicialTemp = _getDataInicial();
@@ -231,6 +357,73 @@ Widget _buildFiltrosExtras() {
 }
 
 
+void _imprimirNotaVenda(Map<String, dynamic> venda) {
+  final pdf = pw.Document();
+  final cliente = venda['cliente']?['nome'] ?? 'CONSUMIDOR';
+  final telefone = venda['cliente']?['telefone'] ?? '';
+  final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
+  final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
+  final formasPagamento = (venda['formasPagamento'] as List).join(" / ");
+  final frete = venda['frete'] ?? 0.0;
+  final total = venda['totalVenda'] ?? 0.0;
+
+  pdf.addPage(
+    pw.Page(
+      build: (context) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text("SENHORITA CINTAS", style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 4),
+          pw.Text("COMPROVANTE DE VENDA", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 4),
+          pw.Text("Atendente: ${venda['nomeUsuario']}"),
+          pw.Text("Cliente: $cliente"),
+          if (telefone.isNotEmpty) pw.Text("Telefone: $telefone"),
+          pw.Text("Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}"),
+          pw.SizedBox(height: 10),
+          pw.Text("Itens:", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Divider(),
+          ...itens.map((item) {
+            final quantidade = item['quantidade'] ?? 1;
+            final precoFinal = item['precoFinal'] ?? 0.0;
+            final desconto = item['desconto'] ?? 0.0;
+            final precoPromocional = item['precoPromocional'] ?? 0.0;
+            final totalItem = precoFinal * quantidade;
+
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                if (desconto > 0 || precoPromocional > 0)
+                  pw.Text(">> PRODUTO EM PROMOÇÃO <<",
+                      style: pw.TextStyle(color: PdfColors.red, fontWeight: pw.FontWeight.bold)),
+                pw.Text("${item['produtoNome']} ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}"),
+                pw.Text("Quantidade: $quantidade - Unitário: R\$ ${precoFinal.toStringAsFixed(2)}"
+                    "${desconto > 0 ? ' | Desc: R\$ ${desconto.toStringAsFixed(2)}' : ''}"
+                    "${precoPromocional > 0 ? ' | Promo: R\$ ${precoPromocional.toStringAsFixed(2)}' : ''}"),
+                pw.Text("Subtotal: R\$ ${totalItem.toStringAsFixed(2)}"),
+                pw.Divider(),
+              ],
+            );
+          }),
+          pw.SizedBox(height: 10),
+          pw.Text("Frete: R\$ ${frete.toStringAsFixed(2)}"),
+          pw.Text("Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}",
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),              
+          pw.Text("Total com Frete: R\$ ${(total + frete).toStringAsFixed(2)}",
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Text("Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}"),
+          pw.Text("Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}"),
+          pw.SizedBox(height: 10),
+          pw.Text("Forma de Pagamento: $formasPagamento"),
+          pw.SizedBox(height: 10),
+          pw.Text("Obrigada pela preferência!", style: pw.TextStyle(fontSize: 12)),
+        ],
+      ),
+    ),
+  );
+
+  Printing.layoutPdf(onLayout: (format) => pdf.save());
+}
 
 Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
   final total = venda['total'] ?? 0;
@@ -293,10 +486,18 @@ Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
     ),
   );
 }
+Future<void> _carregarUsuarios() async {
+  final snapshot = await FirebaseFirestore.instance.collection('usuarios').get();
+  setState(() {
+    usuarios = snapshot.docs.map((doc) => doc['nome'] as String).toList();
+  });
+}
 @override
 void initState() {
   super.initState();
   _carregarFiltros();
+  buscarTipoUsuario();
+  _carregarUsuarios();
 }
 
 Future<void> _carregarFiltros() async {
@@ -346,6 +547,15 @@ Future<void> _carregarFiltros() async {
         backgroundColor: const Color.fromARGB(255, 194, 131, 178),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
+                actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.white),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginView()));
+            },
+          ),
+        ],
       ),
                   drawer: Drawer(
         child: Container(
@@ -399,36 +609,195 @@ Future<void> _carregarFiltros() async {
           ),
         ),
       ),
-      body: Column(
-        children: [
-          _buildFiltros(),
-          _buildFiltrosExtras(),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _getVendasFiltradas(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) return const Center(child: Text('Erro ao carregar vendas.'));
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          body: carregandoUsuario
+              ? const Center(child: CircularProgressIndicator())
+              : Column(
+                  children: [
+                    // Filtros (dia, semana, mês, personalizado)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      color: Colors.grey[100],
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: filtros.map((filtro) {
+                          final isSelecionado = filtroSelecionado == filtro;
+                          return ChoiceChip(
+                            label: Text(
+                              filtro == 'personalizado'
+                                  ? 'Personalizado'
+                                  : filtro[0].toUpperCase() + filtro.substring(1),
+                              style: TextStyle(
+                                color: isSelecionado ? Colors.white : Colors.black,
+                              ),
+                            ),
+                            selected: isSelecionado,
+                            selectedColor: primaryColor,
+                            onSelected: (selected) async {
+                              if (selected) {
+                                if (filtro == 'personalizado') {
+                                  await _selecionarIntervaloDatas();
+                                }
+                                setState(() => filtroSelecionado = filtro);
+                              }
+                            },
+                          );
+                        }).toList(),
+                      ),
+                    ),
 
-                final vendas = snapshot.data!.docs;
+                    // Exibe intervalo de data se for personalizado
+                    if (filtroSelecionado == 'personalizado' && intervaloPersonalizado != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.date_range, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.start)} até '
+                              '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.end)}',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                                                Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            child: Row(
+                              children: [
+                                // Filtro por Funcionário
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: usuarioSelecionado,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Funcionário',
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Todos')),
+                                      ...usuarios.map((nome) => DropdownMenuItem(value: nome, child: Text(nome))),
+                                    ],
+                                    onChanged: (value) {
+                                      setState(() {
+                                        usuarioSelecionado = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                // Filtro por Forma de Pagamento
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: formaPagamentoSelecionada,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Pagamento',
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Todas')),
+                                      ...formasPagamento.map((fp) => DropdownMenuItem(value: fp, child: Text(fp))),
+                                    ],
+                                    onChanged: (value) {
+                                      setState(() {
+                                        formaPagamentoSelecionada = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
 
-                if (vendas.isEmpty) {
-                  return const Center(child: Text('Nenhuma venda registrada.'));
-                }
 
-                return ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: vendas.length,
-                  itemBuilder: (context, index) {
-                    final venda = vendas[index].data() as Map<String, dynamic>;
-                    return _buildVendaCard(venda, index);
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
+                    // Lista de vendas
+                    Expanded(
+                      child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                        stream:
+                            _getVendasStream().map((vendas) => vendas.map((doc) => doc as QueryDocumentSnapshot<Map<String, dynamic>>).toList()),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.waiting) {
+                            return const Center(child: CircularProgressIndicator());
+                          }
+                          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                            return const Center(child: Text('Nenhuma venda encontrada.'));
+                          }
+
+                          final vendas = snapshot.data!;
+
+                          return ListView.builder(
+                            itemCount: vendas.length,
+                            itemBuilder: (context, index) {
+                              final venda = vendas[index].data();
+                                DateTime dataVenda;
+
+                                final rawData = venda['dataVenda'];
+
+                                if (rawData is Timestamp) {
+                                  dataVenda = rawData.toDate();
+                                } else if (rawData is String) {
+                                  dataVenda = DateTime.tryParse(rawData) ?? DateTime.now();
+                                } else {
+                                  dataVenda = DateTime.now(); // fallback seguro
+                                }
+
+                              final cliente = venda['cliente']?['nome'] ?? 'Cliente não informado';
+                              final valor = venda['totalVenda'] is int
+                                  ? (venda['totalVenda'] as int).toDouble()
+                                  : venda['totalVenda'] ?? 0.0;
+
+                              return Card(
+                                elevation: 2,
+                                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: ListTile(
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                  title: Text(
+                                    'R\$ ${valor.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  subtitle: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        cliente,
+                                        style: const TextStyle(fontSize: 14),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        DateFormat('dd/MM/yyyy – HH:mm').format(dataVenda),
+                                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                      ),
+                                    ],
+                                  ),
+                                  trailing: IconButton(
+                                    icon: const Icon(Icons.receipt_long_rounded, color: Colors.purple),
+                                    onPressed: () {
+                                      _mostrarDetalhesVenda(venda);
+                                    },
+                                  ),
+                                  onTap: () {
+                                    _mostrarDetalhesVenda(venda);
+                                  },
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+
     );
   }
 }

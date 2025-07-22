@@ -1,4 +1,3 @@
-// ignore_for_file: use_build_context_synchronously
 
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -56,15 +55,20 @@ class _VendasViewState extends State<VendasView> {
   String? formaPagamentoSelecionada;
   double frete = 0.0;
   double total = 0.0;
-
-
-
+  String? nomeLoja;
+  String? funcionarioSelecionado;
+  List<String> funcionarios = [];
 
 
   @override
   void initState() {
     super.initState();
     buscarTipoUsuario();
+      buscarFuncionarios().then((lista) {
+    setState(() {
+      funcionarios = lista;
+    });
+  });
   }
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
@@ -100,6 +104,15 @@ double _calcularDescontoTotal() {
 double _calcularTotalPago() {
   return pagamentos.fold(0.0, (total, p) => total + (p['valor'] as double));
 }
+Future<List<String>> buscarFuncionarios() async {
+  final snapshot = await FirebaseFirestore.instance
+      .collection('usuarios')
+      .where('tipo', whereIn: ['funcionario', 'admin'])
+      .get();
+
+  return snapshot.docs.map((doc) => doc['nomeUsuario'] as String).toList();
+}
+
 Future<List<Map<String, dynamic>>> buscarSugestoesProduto(String query) async {
   final resultado = await FirebaseFirestore.instance
       .collection('produtos')
@@ -117,6 +130,20 @@ Future<List<Map<String, dynamic>>> buscarSugestoesProduto(String query) async {
       })
       .toList();
 }
+
+Future<String> buscarNomeLoja() async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return 'Loja N/A';
+
+  final doc = await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
+  if (doc.exists) {
+    return doc.data()?['lojaSelecionada'] ?? 'Loja N/A';
+  } else {
+    return 'Loja N/A';
+  }
+}
+
+
 
 Future<void> buscarProdutosSugestoes(String termo) async {
   if (termo.isEmpty) {
@@ -215,10 +242,17 @@ Future<void> _mostrarResumoVendaDialog(double totalVenda, double totalPago) asyn
       ),
       actions: [
         TextButton(
-          onPressed: () {
-            Navigator.pop(context);
-            _imprimirNota();
-          },
+        onPressed: () {
+          Navigator.pop(context);
+          _imprimirNota(
+            List.from(itensVendidos),
+             valorFrete,
+            List.from(pagamentos),
+            _calcularTotalPago(), // <- aqui você deve passar o valor total pago
+          );
+        },
+
+
           child: const Text('🖨️ Imprimir Nota'),
         ),
         TextButton(
@@ -232,12 +266,25 @@ Future<void> _mostrarResumoVendaDialog(double totalVenda, double totalPago) asyn
 
 
 
-void _imprimirNota() {
+Future<void> _imprimirNota(
+  List<Map<String, dynamic>> itens,
+  double frete,
+  List<Map<String, dynamic>> pagamentos,
+  double totalPago,
+) async {
+  final nomeLoja = await buscarNomeLoja();
   final pdf = pw.Document();
-
   final valorFrete = frete;
-  final valorTotal = _calcularTotalGeral();
+
+  // Calcular total dos produtos vendidos
+  double totalVenda = itens.fold(0.0, (total, item) {
+    final preco = item['precoFinal'] ?? 0.0;
+    final qtd = item['quantidade'] ?? 0;
+    return total + (preco * qtd);
+  });
+
   final formasPagamento = pagamentos.map((p) => p['forma']).join(", ");
+  final troco = (totalPago - totalVenda - frete).clamp(0, double.infinity);
 
   pdf.addPage(
     pw.Page(
@@ -249,14 +296,15 @@ void _imprimirNota() {
             pw.SizedBox(height: 4),
             pw.Text("COMPROVANTE PAGAMENTO", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
             pw.SizedBox(height: 4),
-            pw.Text("Atendente: $nomeUsuario"),
+            pw.Text("Funcionario: $funcionarioSelecionado"),
             pw.Text("Cliente: ${clienteNomeController.text.isNotEmpty ? clienteNomeController.text : 'CONSUMIDOR'}"),
+            pw.Text("Loja: $nomeLoja"),
             pw.Text("Data: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}"),
             pw.SizedBox(height: 10),
             pw.Text("Itens:", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
             pw.Divider(),
 
-            ...itensVendidos.map((item) {
+            ...itens.map((item) {
               final nome = item['produtoNome'] ?? '';
               final tamanho = item['tamanho'] ?? '';
               final qtd = item['quantidade'] ?? 0;
@@ -264,9 +312,9 @@ void _imprimirNota() {
               final precoPromocional = item['precoPromocional'] ?? 0.0;
               final desconto = item['desconto'] ?? 0.0;
 
-              final precoTotal = preco * qtd;
+              final precoUnitario = preco;
+              final precoTotal = precoUnitario * qtd;
 
-              // Verifica se tem desconto ou promoção
               final temPromocao = precoPromocional > 0 && precoPromocional < preco;
               final temDesconto = desconto > 0;
 
@@ -280,16 +328,21 @@ void _imprimirNota() {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   pw.Text("$nome ${tamanho.isNotEmpty ? '($tamanho)' : ''}"),
-                  pw.Text("Qtd: $qtd x $precoUnitarioTexto = R\$ ${precoTotal.toStringAsFixed(2)}"),
+                  pw.Text("Quantidade: $qtd x $precoUnitarioTexto = R\$ ${precoTotal.toStringAsFixed(2)}"),
                   pw.SizedBox(height: 4),
                 ],
               );
             }),
 
-            pw.Divider(),
-            if (valorFrete > 0) pw.Text("Frete: R\$ ${valorFrete.toStringAsFixed(2)}"),
+          pw.Divider(),
+          if (valorFrete > 0)
+            pw.Text("Frete: R\$ ${valorFrete.toStringAsFixed(2)}"),
+          if (valorFrete > 0)  
+            pw.Text("Total da Venda com o Frete: R\$ ${(totalVenda + valorFrete).toStringAsFixed(2)}"),
+            pw.Text("Total da Venda: R\$ ${totalVenda.toStringAsFixed(2)}"),
+            pw.Text("Total Pago: R\$ ${totalPago.toStringAsFixed(2)}"),
+            pw.Text("Troco: R\$ ${troco.toStringAsFixed(2)}"),
             pw.Text("Forma de Pagamento: ${formasPagamento.isNotEmpty ? formasPagamento : 'Não informado'}"),
-            pw.Text("Total: R\$ ${(valorTotal + valorFrete).toStringAsFixed(2)}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
             pw.SizedBox(height: 10),
             pw.Text("Obrigada pela preferência!", style: pw.TextStyle(fontSize: 12)),
           ],
@@ -298,7 +351,7 @@ void _imprimirNota() {
     ),
   );
 
-  Printing.layoutPdf(onLayout: (format) => pdf.save());
+  await Printing.layoutPdf(onLayout: (format) => pdf.save());
 }
 
 
@@ -376,18 +429,19 @@ Future<void> realizarVenda() async {
       'totalVenda': totalVenda,
       'tipoNota': tipoNotaSelecionada,
       'itens': itensVendidos,
-      'total': totalVenda,
       'pagamentos': pagamentos,
       'totalPago': totalPago,
       'troco': (totalPago - totalVenda).clamp(0, double.infinity),
       'frete': freteController.text.trim().isNotEmpty? _converterParaDouble(freteController.text.trim()) : null,
       'cliente': clienteNomeController.text.trim().isNotEmpty? {
-        'nome': clienteNomeController.text.trim(),
-        'telefone': clienteTelefoneController.text.trim(),}: null,
+      'nome': clienteNomeController.text.trim(),
+      'telefone': clienteTelefoneController.text.trim(),}: null,
       'clienteId': clienteSelecionado?['id'],
       'nomeUsuario': nomeUsuario,
       'usuarioId': FirebaseAuth.instance.currentUser?.uid,
       'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
+      'lojaSelecionada': FirebaseAuth.instance.currentUser?.uid, // Adiciona loja selecionada
+      'funcionario': funcionarioSelecionado ?? '---',
 
     });
 
@@ -454,26 +508,6 @@ Future<void> realizarVenda() async {
           batch.update(produtoRef, {
             'quantidade': novaQuantidade > 0 ? novaQuantidade : 0,
           });
-
-          // 🚚 Mover para "estoque" se quantidade zerar
-          if (novaQuantidade <= 0) {
-            final estoqueCheck = await firestore
-                .collection('estoque')
-                .where('produtoId', isEqualTo: produtoId)
-                .limit(1)
-                .get();
-
-            if (estoqueCheck.docs.isEmpty) {
-              await firestore.collection('estoque').add({
-                'produtoId': produtoId,
-                'nome': produtoData['nome'],
-                'codigoBarras': produtoData['codigoBarras'],
-                'quantidade': 0,
-                'tamanho': '',
-                'dataEntrada': DateTime.now().toIso8601String(),
-              });
-            }
-          }
         }
 
         // 🧾 Salva item vendido no histórico
@@ -492,6 +526,8 @@ Future<void> realizarVenda() async {
           'precoPromocional': item['precoPromocional'] ?? 0.0,
           'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
           'usuarioId': FirebaseAuth.instance.currentUser?.uid,
+         'funcionario': funcionarioSelecionado ?? '---',
+
 
         });
       }
@@ -665,6 +701,7 @@ Widget build(BuildContext context) {
                     }
                   },
                 ),
+                
 
                 if (sugestoesProdutos.isNotEmpty)
                   ...sugestoesProdutos.map((produto) => Card(
@@ -990,7 +1027,26 @@ Widget build(BuildContext context) {
                   });
                 },
               ),
-
+              const SizedBox(height: 20),
+                        DropdownButtonFormField<String>(
+            value: funcionarioSelecionado,
+            hint: Text('Selecionar Funcionário'),
+            items: funcionarios.map((String nome) {
+              return DropdownMenuItem<String>(
+                value: nome,
+                child: Text(nome),
+              );
+            }).toList(),
+            onChanged: (String? novoValor) {
+              setState(() {
+                funcionarioSelecionado = novoValor;
+              });
+            },
+            decoration: InputDecoration(
+              labelText: 'Funcionário',
+              border: OutlineInputBorder(),
+            ),
+          ),
 
             const SizedBox(height: 20),
             ElevatedButton.icon(

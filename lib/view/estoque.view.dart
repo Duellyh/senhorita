@@ -1,35 +1,27 @@
-// ignore_for_file: use_build_context_synchronously
-
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
-import 'package:senhorita/view/estoque.view.dart';
-import 'package:senhorita/view/historico.vendas.dart';
 import 'package:senhorita/view/home.view.dart';
 import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
-import 'package:senhorita/view/valores.recebidos.view.dart';
+import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 
-class RelatoriosView extends StatefulWidget {
-  const RelatoriosView({super.key});
+class EstoqueView extends StatefulWidget {
+  const EstoqueView({super.key});
 
   @override
-  State<RelatoriosView> createState() => _RelatoriosViewState();
+  State<EstoqueView> createState() => _EstoqueViewState();
 }
 
-class _RelatoriosViewState extends State<RelatoriosView> {
-  int totalVendas = 0;
-  double totalRecebido = 0.0;
-  int totalClientes = 0;
+class _EstoqueViewState extends State<EstoqueView> {
+  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
   String tipoUsuario = '';
   final user = FirebaseAuth.instance.currentUser;
-  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
 
@@ -37,12 +29,22 @@ class _RelatoriosViewState extends State<RelatoriosView> {
   @override
   void initState() {
     super.initState();
-    _carregarRelatorio();
     buscarTipoUsuario();
   }
 
 
-  Future<void> buscarTipoUsuario() async {
+  bool _isProdutoComEstoqueBaixo(Map<String, dynamic> data) {
+    final quantidadeTotal = data['quantidade'] ?? 0;
+    if (quantidadeTotal <= 3) return true;
+
+    final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
+    if (tamanhos != null) {
+      return tamanhos.values.any((qtd) => qtd is int && qtd <= 2);
+    }
+
+    return false;
+  }
+    Future<void> buscarTipoUsuario() async {
     if (user != null) {
       final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
       setState(() {
@@ -52,37 +54,11 @@ class _RelatoriosViewState extends State<RelatoriosView> {
     }
   }
 
-  Future<void> _carregarRelatorio() async {
-    final vendasSnapshot = await FirebaseFirestore.instance.collection('vendas').get();
-    final clientesSnapshot = await FirebaseFirestore.instance.collection('clientes').get();
-
-    double somaRecebido = 0.0;
-
-    for (var doc in vendasSnapshot.docs) {
-      final data = doc.data();
-      final totalPago = data['totalPago'];
-      if (totalPago != null && totalPago is num) {
-        somaRecebido += totalPago.toDouble();
-      }
-    }
-
-    setState(() {
-      totalVendas = vendasSnapshot.size;
-      totalRecebido = somaRecebido;
-      totalClientes = clientesSnapshot.size;
-    });
-  }
-
-  String formatCurrency(double value) {
-    return NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$').format(value);
-  }
-
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
       appBar: AppBar(
-                backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+        backgroundColor: const Color.fromARGB(255, 194, 131, 178),
                 iconTheme: const IconThemeData(color: Colors.white),
                 title: Stack(
                   alignment: Alignment.center,
@@ -96,7 +72,7 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                     ),
                     const Center(
                       child: Text(
-                        'RELATÓRIOS',
+                        'ESTOQUE BAIXO',
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
                       ),
                     ),
@@ -114,8 +90,9 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                     },
                   ),
                 ],
+
       ),
-      drawer: Drawer(
+            drawer: Drawer(
         child: Container(
           color: primaryColor,
           child: ListView(
@@ -132,8 +109,7 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                   'Olá, ${nomeUsuario.toUpperCase()}',
                   style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                 ),
-
-                  ],
+                   ],
                 ),
               ),
               if (tipoUsuario == 'admin')
@@ -167,102 +143,79 @@ class _RelatoriosViewState extends State<RelatoriosView> {
           ),
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _carregarRelatorio,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            const Text('📊 Resumo Geral', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            _infoCard(
-              icon: Icons.shopping_bag,
-              title: 'Total de Vendas',
-              value: '$totalVendas',
-              color: Colors.indigo,
-            ),
-            _infoCard(
-              icon: Icons.attach_money,
-              title: 'Total Recebido',
-              value: formatCurrency(totalRecebido),
-              color: Colors.green,
-            ),
-            _infoCard(
-              icon: Icons.people,
-              title: 'Clientes Ativos',
-              value: '$totalClientes',
-              color: Colors.deepPurple,
-            ),
-            const SizedBox(height: 24),
-            const Text('📂 Relatórios Detalhados', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            _actionCard(
-              icon: Icons.inventory,
-              title: 'Produtos com Estoque Baixo',
-              color: Colors.blue,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EstoqueView())),
-            ),
-            _actionCard(
-              icon: Icons.history,
-              title: 'Histórico de Vendas',
-              color: Colors.orange,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoricoVendasView())),
-            ),
-            _actionCard(
-              icon: Icons.monetization_on,
-              title: 'Fluxo de Caixa',
-              color: Colors.teal,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ValoresRecebidosView())),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('produtos').snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-  Widget _infoCard({
-    required IconData icon,
-    required String title,
-    required String value,
-    required Color color,
-  }) {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      elevation: 2,
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color,
-          child: Icon(icon, color: Colors.white),
-        ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(value, style: const TextStyle(fontSize: 16)),
-      ),
-    );
-  }
+          final produtosBaixos = snapshot.data?.docs
+              .where((doc) => _isProdutoComEstoqueBaixo(doc.data() as Map<String, dynamic>))
+              .toList();
 
-  Widget _actionCard({
-    required IconData icon,
-    required String title,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      elevation: 2,
-      child: ListTile(
-        onTap: onTap,
-        leading: CircleAvatar(
-          backgroundColor: color,
-          child: Icon(icon, color: Colors.white),
-        ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+          if (produtosBaixos == null || produtosBaixos.isEmpty) {
+            return const Center(child: Text('Nenhum produto com estoque baixo.'));
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                color: Colors.red.shade100,
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  'Total de produtos com estoque baixo: ${produtosBaixos.length}',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: produtosBaixos.length,
+                  padding: const EdgeInsets.all(8),
+                  itemBuilder: (context, index) {
+                    final produto = produtosBaixos[index];
+                    final data = produto.data() as Map<String, dynamic>;
+                    final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
+
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      child: ListTile(
+                        leading: data['foto'] != null
+                            ? Image.network(data['foto'], width: 60, height: 60, fit: BoxFit.cover)
+                            : const Icon(Icons.image_not_supported),
+                        title: Text(data['nome'] ?? 'Sem nome'),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Categoria: ${data['categoria'] ?? '-'}'),
+                            Text('Quantidade total: ${data['quantidade'] ?? 0}'),
+                            if (tamanhos != null && tamanhos.isNotEmpty)
+                              Wrap(
+                                spacing: 6,
+                                children: tamanhos.entries
+                                    .where((e) => e.value is int && e.value <= 2)
+                                    .map((e) => Chip(
+                                          label: Text('${e.key}: ${e.value}'),
+                                          backgroundColor: Colors.red.shade100,
+                                        ))
+                                    .toList(),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 }
-
   Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
     return ListTile(
       leading: Icon(icon, color: Colors.white),
