@@ -180,7 +180,7 @@ Future<void> salvarProduto() async {
       'loja': lojaSelecionada,
       'foto': fotoUrl ?? '',
       if (tipoUsuario != 'funcionario')  // ⬅️ Condicional para não salvar valorReal
-        'valorReal': _converterParaDouble(valorRealController.text),
+      'valorReal': _converterParaDouble(valorRealController.text),
       'precoVenda': _converterParaDouble(precoVendaController.text), // permanece obrigatório
       'categoria': categoria,
       'dataCadastro': FieldValue.serverTimestamp(),
@@ -322,7 +322,7 @@ Future<void> salvarProduto() async {
                                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
                                 }),
                               if (tipoUsuario == 'admin')
-                                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                                _menuItem(Icons.show_chart, 'Relatórios', () {
                                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
                                 }),
                               if (tipoUsuario == 'admin')

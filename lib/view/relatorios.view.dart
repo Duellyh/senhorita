@@ -12,7 +12,7 @@ import 'package:senhorita/view/historico.vendas.dart';
 import 'package:senhorita/view/home.view.dart';
 import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/produtos.view.dart';
-import 'package:senhorita/view/valores.recebidos.view.dart';
+import 'package:senhorita/view/financeiro.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 
@@ -156,7 +156,7 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                 Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
                }),              
               if (tipoUsuario == 'admin')
-                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
                 }),
               if (tipoUsuario == 'admin')
@@ -209,10 +209,11 @@ class _RelatoriosViewState extends State<RelatoriosView> {
             ),
             _actionCard(
               icon: Icons.monetization_on,
-              title: 'Fluxo de Caixa',
+              title: 'Dashboard Financeiro',
               color: Colors.teal,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ValoresRecebidosView())),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FinanceiroView())),
             ),
+
           ],
         ),
       ),

@@ -58,6 +58,7 @@ class _VendasViewState extends State<VendasView> {
   String? nomeLoja;
   String? funcionarioSelecionado;
   List<String> funcionarios = [];
+  double custoReal = 0.0; // Variável para armazenar o custo real do produto
 
 
   @override
@@ -399,7 +400,6 @@ void adicionarProdutoAtual() {
   }
 }
 
-
 Future<void> realizarVenda() async {
   final totalVenda = _calcularTotalGeral();
   final totalPago = _calcularTotalPago();
@@ -424,34 +424,75 @@ Future<void> realizarVenda() async {
   final batch = firestore.batch();
 
   try {
-    final vendaRef = await firestore.collection('vendas').add({
-      'dataVenda': DateTime.now(),
-      'totalVenda': totalVenda,
-      'tipoNota': tipoNotaSelecionada,
-      'itens': itensVendidos,
-      'pagamentos': pagamentos,
-      'totalPago': totalPago,
-      'troco': (totalPago - totalVenda).clamp(0, double.infinity),
-      'frete': freteController.text.trim().isNotEmpty? _converterParaDouble(freteController.text.trim()) : null,
-      'cliente': clienteNomeController.text.trim().isNotEmpty? {
-      'nome': clienteNomeController.text.trim(),
-      'telefone': clienteTelefoneController.text.trim(),}: null,
-      'clienteId': clienteSelecionado?['id'],
-      'nomeUsuario': nomeUsuario,
-      'usuarioId': FirebaseAuth.instance.currentUser?.uid,
-      'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
-      'lojaSelecionada': FirebaseAuth.instance.currentUser?.uid, // Adiciona loja selecionada
-      'funcionario': funcionarioSelecionado ?? '---',
-
-    });
+    double custoRealTotal = 0;
+    List<Map<String, dynamic>> itensComValorReal = [];
 
     for (final item in itensVendidos) {
+      final produtoId = item['produtoId'];
+      final quantidadeVendida = item['quantidade'];
+
+        double valorReal = 0;
+
+        final produtoQuery = await firestore
+            .collection('produtos')
+            .where('codigoBarras', isEqualTo: produtoId)
+            .limit(1)
+            .get();
+
+        if (produtoQuery.docs.isNotEmpty) {
+          final produtoDoc = produtoQuery.docs.first;
+          final data = produtoDoc.data();
+          valorReal = (data['valorReal'] ?? 0).toDouble();
+        }
+
+
+      custoRealTotal += valorReal * quantidadeVendida;
+
+      final itemAtualizado = Map<String, dynamic>.from(item);
+      itemAtualizado['valorReal'] = valorReal;
+      itensComValorReal.add(itemAtualizado);
+    }
+
+      final categorias = itensVendidos
+          .map((item) => item['categoria'] ?? 'Sem categoria')
+          .toSet()
+          .toList();
+
+      final vendaRef = await firestore.collection('vendas').add({
+        'dataVenda': DateTime.now(),
+        'totalVenda': totalVenda,
+        'tipoNota': tipoNotaSelecionada,
+        'itens': itensComValorReal,
+        'pagamentos': pagamentos,
+        'totalPago': totalPago,
+        'troco': (totalPago - totalVenda).clamp(0, double.infinity),
+        'frete': freteController.text.trim().isNotEmpty
+            ? _converterParaDouble(freteController.text.trim())
+            : null,
+        'cliente': clienteNomeController.text.trim().isNotEmpty
+            ? {
+                'nome': clienteNomeController.text.trim(),
+                'telefone': clienteTelefoneController.text.trim(),
+              }
+            : null,
+        'clienteId': clienteSelecionado?['id'],
+        'nomeUsuario': nomeUsuario,
+        'usuarioId': FirebaseAuth.instance.currentUser?.uid,
+        'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
+        'lojaSelecionada': FirebaseAuth.instance.currentUser?.uid,
+        'funcionario': funcionarioSelecionado ?? '---',
+        'valorReal': custoRealTotal,
+        'categorias': categorias, 
+      });
+
+
+    for (final item in itensComValorReal) {
       final produtoId = item['produtoId'];
       final produtoDocId = item['docId'];
       final tamanho = item['tamanho'];
       final quantidadeVendida = item['quantidade'];
+      final valorRealItem = item['valorReal'] ?? 0.0;
 
-      // 🔍 Atualiza/remover estoque do item vendido (coleção "estoque")
       final estoqueQuery = await firestore
           .collection('estoque')
           .where('produtoId', isEqualTo: produtoId)
@@ -472,18 +513,16 @@ Future<void> realizarVenda() async {
         }
       }
 
-      // 🔄 Atualiza produto na coleção "produtos"
       final produtoRef = firestore.collection('produtos').doc(produtoDocId);
-      final produtoDoc = await produtoRef.get();
+      final produtoDocSnapshot = await produtoRef.get();
 
-      if (produtoDoc.exists) {
-        final produtoData = produtoDoc.data() as Map<String, dynamic>;
+      if (produtoDocSnapshot.exists) {
+        final produtoData = produtoDocSnapshot.data() as Map<String, dynamic>;
 
         final possuiTamanhos = produtoData.containsKey('tamanhos') &&
             (produtoData['tamanhos'] as Map<String, dynamic>).isNotEmpty;
 
         if (possuiTamanhos && tamanho.isNotEmpty) {
-          // 👕 Produto com tamanhos
           Map<String, dynamic> tamanhos = Map<String, dynamic>.from(produtoData['tamanhos']);
           final estoqueAtualTamanho = tamanhos[tamanho] ?? 0;
           final novoEstoqueTamanho = estoqueAtualTamanho - quantidadeVendida;
@@ -501,7 +540,6 @@ Future<void> realizarVenda() async {
             'quantidade': novaQuantidadeTotalProduto,
           });
         } else {
-          // 📦 Produto sem tamanhos
           final quantidadeAtual = (produtoData['quantidade'] ?? 0) as int;
           final novaQuantidade = quantidadeAtual - quantidadeVendida;
 
@@ -510,7 +548,6 @@ Future<void> realizarVenda() async {
           });
         }
 
-        // 🧾 Salva item vendido no histórico
         await firestore.collection('vendidos').add({
           'produtoId': produtoId,
           'produtoNome': item['produtoNome'] ?? '',
@@ -518,7 +555,7 @@ Future<void> realizarVenda() async {
           'quantidade': quantidadeVendida,
           'tamanho': tamanho,
           'precoFinal': item['precoFinal'] ?? 0.0,
-          'dataVenda': DateTime.now(), 
+          'dataVenda': DateTime.now(),
           'horaVenda': DateTime.now().toIso8601String(),
           'vendaId': vendaRef.id,
           'detalhesProduto': produtoData,
@@ -526,34 +563,33 @@ Future<void> realizarVenda() async {
           'precoPromocional': item['precoPromocional'] ?? 0.0,
           'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
           'usuarioId': FirebaseAuth.instance.currentUser?.uid,
-         'funcionario': funcionarioSelecionado ?? '---',
-
-
+          'funcionario': funcionarioSelecionado ?? '---',
+          'valorReal': valorRealItem,
+          'categoria': produtoData['categoria'] ?? 'Sem categoria',
         });
       }
     }
 
-            await batch.commit();
+    await batch.commit();
 
-              if (clienteNomeController.text.trim().isNotEmpty) {
-            final clienteExiste = await FirebaseFirestore.instance
-                .collection('clientes')
-                .where('nome', isEqualTo: clienteNomeController.text.trim())
-                .where('telefone', isEqualTo: clienteTelefoneController.text.trim())
-                .get();
+    if (clienteNomeController.text.trim().isNotEmpty) {
+      final clienteExiste = await firestore
+          .collection('clientes')
+          .where('nome', isEqualTo: clienteNomeController.text.trim())
+          .where('telefone', isEqualTo: clienteTelefoneController.text.trim())
+          .get();
 
-            if (clienteExiste.docs.isEmpty) {
-              await FirebaseFirestore.instance.collection('clientes').add({
-                'nome': clienteNomeController.text.trim(),
-                'telefone': clienteTelefoneController.text.trim(),
-                'dataCadastro': DateTime.now().toIso8601String(),
-              });
-            }
-          }
+      if (clienteExiste.docs.isEmpty) {
+        await firestore.collection('clientes').add({
+          'nome': clienteNomeController.text.trim(),
+          'telefone': clienteTelefoneController.text.trim(),
+          'dataCadastro': DateTime.now().toIso8601String(),
+        });
+      }
+    }
 
+    await _mostrarResumoVendaDialog(totalVenda, totalPago);
 
-    // Chamar impressão conforme tipo de nota
-await _mostrarResumoVendaDialog(totalVenda, totalPago);
 
     setState(() {
       itensVendidos.clear();
@@ -571,6 +607,8 @@ await _mostrarResumoVendaDialog(totalVenda, totalPago);
     );
   }
 }
+
+
   @override
 Widget build(BuildContext context) {
   final tamanhosMap = produtoEncontrado?['tamanhos'] as Map<String, dynamic>?;
@@ -651,7 +689,7 @@ Widget build(BuildContext context) {
                       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
                     }),                    
                     if (tipoUsuario == 'admin')
-                      _menuItem(Icons.bar_chart, 'Relatórios', () {
+                      _menuItem(Icons.show_chart, 'Relatórios', () {
                         Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
                       }),
                     if (tipoUsuario == 'admin')

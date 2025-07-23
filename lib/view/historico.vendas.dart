@@ -88,6 +88,7 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
               Text('Cliente: $cliente'),
               if (telefone.isNotEmpty) Text('Telefone: $telefone'),
               Text('Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}'),
+              Text("Atendente: ${venda['nomeUsuario']}"),
               const SizedBox(height: 10),
               const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
               const Divider(),
@@ -598,7 +599,7 @@ Future<void> _carregarFiltros() async {
                 Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
                }),
               if (tipoUsuario == 'admin')
-                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
                 }),
               if (tipoUsuario == 'admin')

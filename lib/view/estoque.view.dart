@@ -132,7 +132,7 @@ class _EstoqueViewState extends State<EstoqueView> {
                 Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
                }),              
               if (tipoUsuario == 'admin')
-                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
                 }),
               if (tipoUsuario == 'admin')

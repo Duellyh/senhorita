@@ -8,6 +8,8 @@ import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/estoque.view.dart';
+import 'package:senhorita/view/financeiro.view.dart';
+import 'package:senhorita/view/historico.vendas.dart';
 import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
@@ -140,7 +142,7 @@ class _HomeViewState extends State<HomeView> {
                 Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
                }),              
               if (tipoUsuario == 'admin')
-                _menuItem(Icons.bar_chart, 'Relatórios', () {
+                _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
                 }),
               if (tipoUsuario == 'admin')
@@ -185,7 +187,7 @@ class _HomeViewState extends State<HomeView> {
                           onTap: () {
                             Navigator.push(
                               context,
-                              MaterialPageRoute(builder: (context) => VendasRealizadasView()),
+                              MaterialPageRoute(builder: (context) => HistoricoVendasView()),
                             );
                           },
                       child: FutureBuilder<int>(
@@ -233,6 +235,26 @@ class _HomeViewState extends State<HomeView> {
                             builder: (context, snapshot) {
                               final total = snapshot.data?.toString() ?? '...';
                               return _kpiCard('Produtos com Estoque baixo', total, Icons.inventory, accentColor);
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                        Expanded(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => FinanceiroView()),
+                            );
+                          },
+                          child: FutureBuilder<int>(
+                            future: _contarDocumentos('totalRecebido'),
+                            builder: (context, snapshot) {
+                              final total = snapshot.data?.toString() ?? '...';
+                              return _kpiCard('Dashboard Financeiro', total, Icons.monetization_on, primaryColor);
                             },
                           ),
                         ),
@@ -319,43 +341,66 @@ class _HomeViewState extends State<HomeView> {
     );
   }
 
-  Widget _salesList() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('vendas').orderBy('dataVenda', descending: true).limit(5).snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+Widget _salesList() {
+  return StreamBuilder<QuerySnapshot>(
+    stream: FirebaseFirestore.instance
+        .collection('vendas')
+        .orderBy('dataVenda', descending: true)
+        .limit(5)
+        .snapshots(),
+    builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        return const Center(child: CircularProgressIndicator());
+      }
 
-        final docs = snapshot.data!.docs;
-        if (docs.isEmpty) return const Text('Nenhuma venda encontrada.');
+      if (snapshot.hasError) {
+        return const Center(child: Text('Erro ao carregar vendas.'));
+      }
 
-        return Card(
-          child: ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: docs.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (context, i) {
-              final data = docs[i].data() as Map<String, dynamic>;
-              final total = data['total'] ?? 0.0;
-              final dataVendaRaw = data['dataVenda'];
+      final docs = snapshot.data?.docs ?? [];
+      if (docs.isEmpty) {
+        return const Text('Nenhuma venda encontrada.');
+      }
 
-              String dataFormatada = '';
-              if (dataVendaRaw != null) {
-                final dataVenda = DateTime.tryParse(dataVendaRaw.toString());
-                if (dataVenda != null) {
-                  dataFormatada = DateFormat('dd/MM/yyyy HH:mm').format(dataVenda);
-                }
-              }
+      return Card(
+        child: ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (context, i) {
+            final data = docs[i].data() as Map<String, dynamic>;
 
-              return ListTile(
-                leading: const Icon(Icons.attach_money, color: Colors.pink),
-                title: Text('Venda de R\$ ${total.toStringAsFixed(2)}'),
-                subtitle: Text('Data: $dataFormatada'),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
+            // Corrigido: agora usa 'totalVenda'
+            double total = 0.0;
+            final rawTotal = data['totalVenda'];
+            if (rawTotal is int) {
+              total = rawTotal.toDouble();
+            } else if (rawTotal is double) {
+              total = rawTotal;
+            } else if (rawTotal is String) {
+              total = double.tryParse(rawTotal) ?? 0.0;
+            }
+
+            String dataFormatada = 'Data inválida';
+            final dataVendaRaw = data['dataVenda'];
+            if (dataVendaRaw is Timestamp) {
+              final dataVenda = dataVendaRaw.toDate();
+              dataFormatada = DateFormat('dd/MM/yyyy HH:mm').format(dataVenda);
+            }
+
+            return ListTile(
+              leading: const Icon(Icons.attach_money, color: Colors.pink),
+              title: Text('Venda de R\$ ${total.toStringAsFixed(2)}'),
+              subtitle: Text('Data: $dataFormatada'),
+            );
+          },
+        ),
+      );
+    },
+  );
+}
+
+
+
 }
