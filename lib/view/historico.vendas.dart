@@ -16,6 +16,7 @@ import 'package:senhorita/view/vendas.view.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:diacritic/diacritic.dart';
 
 
 class HistoricoVendasView extends StatefulWidget {
@@ -37,11 +38,13 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
   bool carregandoUsuario = true;
-  String? usuarioSelecionado;
+  String? funcionarioSelecionado;
   String? formaPagamentoSelecionada;
+  List<String> listaUsuarios = []; // preenchido do Firestore
+  List<String> listaFormasPagamento = []; // preenchido do Firestore
 
   List<String> usuarios = []; // preenchido do Firestore
-  List<String> formasPagamento = ['Dinheiro', 'Pix', 'Cartão Crédito', 'Cartão Débito'];
+  List<String> formasPagamento = ['Dinheiro', 'Pix', 'Crédito', 'Débito'];
 
 
   Future<void> buscarTipoUsuario() async {
@@ -88,7 +91,7 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
               Text('Cliente: $cliente'),
               if (telefone.isNotEmpty) Text('Telefone: $telefone'),
               Text('Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}'),
-              Text("Atendente: ${venda['nomeUsuario']}"),
+              Text("Atendente: ${venda['funcionario'] ?? 'Não informado'}"),
               const SizedBox(height: 10),
               const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
               const Divider(),
@@ -155,21 +158,27 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
     final docsFiltrados = snapshot.docs.where((doc) {
       final data = doc.data();
 
-      // Filtro por nomeUsuario
-      if (usuarioSelecionado != null &&
-          (data['nomeUsuario']?.toString().toLowerCase() !=
-              usuarioSelecionado!.toLowerCase())) {
-        return false;
+      // Filtro por funcionário
+      if (funcionarioSelecionado != null &&
+          funcionarioSelecionado!.trim().isNotEmpty) {
+        final funcionario = removeDiacritics(data['funcionario']?.toString().toLowerCase().trim() ?? '');
+        final filtroFuncionario = removeDiacritics(funcionarioSelecionado!.toLowerCase().trim());
+        if (funcionario != filtroFuncionario) return false;
       }
 
       // Filtro por forma de pagamento
-      if (formaPagamentoSelecionada != null) {
-        final pagamentos = (data['pagamentos'] as List?)
-            ?.map((e) => e['forma']?.toString())
+      if (formaPagamentoSelecionada != null &&
+          formaPagamentoSelecionada!.trim().isNotEmpty) {
+        final pagamentos = data['pagamentos'] as List?;
+        final formas = pagamentos
+            ?.whereType<Map>()
+            .map((e) => removeDiacritics(e['forma']?.toString().toLowerCase().trim() ?? ''))
             .toList();
 
-        if (pagamentos == null ||
-            !pagamentos.contains(formaPagamentoSelecionada)) {
+        final formaSelecionadaNormalizada =
+            removeDiacritics(formaPagamentoSelecionada!.toLowerCase().trim());
+
+        if (formas == null || !formas.contains(formaSelecionadaNormalizada)) {
           return false;
         }
       }
@@ -180,6 +189,7 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
     return docsFiltrados;
   });
 }
+
 
 
   Future<void> _selecionarIntervaloDatas() async {
@@ -377,7 +387,7 @@ void _imprimirNotaVenda(Map<String, dynamic> venda) {
           pw.SizedBox(height: 4),
           pw.Text("COMPROVANTE DE VENDA", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
-          pw.Text("Atendente: ${venda['nomeUsuario']}"),
+          pw.Text("Atendente: ${venda['funcionario']}"),
           pw.Text("Cliente: $cliente"),
           if (telefone.isNotEmpty) pw.Text("Telefone: $telefone"),
           pw.Text("Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}"),
@@ -432,7 +442,7 @@ Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
   final itens = venda['itens'] as List<dynamic>? ?? [];
   final cliente = venda['cliente'] ?? 'Não informado';
   final frete = venda['frete'] ?? 0.0;
-  final nomeUsuario = venda['nomeUsuario'] ?? 'Desconhecido';
+  final funcionarioSelecionado = venda['funcionario']?['nome'] ?? 'Não informado';
   final pagamentos = venda['pagamentos'] as List<dynamic>? ?? [];
   final formaPagamento = pagamentos.isNotEmpty
       ? pagamentos.map((p) => '${p['forma']}: R\$ ${(p['valor'] ?? 0).toStringAsFixed(2)}').join(' | ')
@@ -461,7 +471,7 @@ Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
             children: [
               Text('👤 Cliente: $cliente'),
               Text('🚚 Frete: R\$ ${frete.toStringAsFixed(2)}'),
-              Text('👩‍💼 Usuário: $nomeUsuario'),
+              Text('👩‍💼 Funcionario: $funcionarioSelecionado'),
               Text('💳 Pagamentos: $formaPagamento'),
               const Divider(),
               const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -499,7 +509,21 @@ void initState() {
   _carregarFiltros();
   buscarTipoUsuario();
   _carregarUsuarios();
+  buscarFuncionarios().then((funcionarios) {
+    setState(() {
+      usuarios = funcionarios;
+    });
+  });
 }
+Future<List<String>> buscarFuncionarios() async {
+  final snapshot = await FirebaseFirestore.instance
+      .collection('usuarios')
+      .where('tipo', whereIn: ['funcionario', 'admin'])
+      .get();
+
+  return snapshot.docs.map((doc) => doc['nomeUsuario'] as String).toList();
+}
+
 
 Future<void> _carregarFiltros() async {
   try {
@@ -511,10 +535,10 @@ Future<void> _carregarFiltros() async {
     for (var doc in snapshot.docs) {
       final data = doc.data();
 
-      // Pegando o nome do usuário
-      final nome = data['nomeUsuario'];
+      // Pegando o nome do funcionário
+      final nome = data['funcionario'];
       if (nome != null && nome.toString().trim().isNotEmpty) {
-        nomes.add(nome.toString().trim());
+        nomes.add(removeDiacritics(nome.toString().toLowerCase().trim()));
       }
 
       // Pegando formas de pagamento dentro da lista 'pagamentos'
@@ -524,7 +548,7 @@ Future<void> _carregarFiltros() async {
           if (pagamento is Map && pagamento.containsKey('forma')) {
             final forma = pagamento['forma'];
             if (forma != null && forma.toString().trim().isNotEmpty) {
-              formas.add(forma.toString().trim());
+              formas.add(removeDiacritics(forma.toString().toLowerCase().trim()));
             }
           }
         }
@@ -532,13 +556,14 @@ Future<void> _carregarFiltros() async {
     }
 
     setState(() {
-      usuarios = nomes.toList()..sort();
-      formasPagamento = formas.toList()..sort();
+      listaUsuarios = nomes.toList();
+      listaFormasPagamento = formas.toList();
     });
   } catch (e) {
     print('Erro ao carregar filtros: $e');
   }
 }
+
 
   @override
   Widget build(BuildContext context) {
@@ -669,23 +694,32 @@ Future<void> _carregarFiltros() async {
                               children: [
                                 // Filtro por Funcionário
                                 Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: usuarioSelecionado,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Funcionário',
-                                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                      border: OutlineInputBorder(),
-                                    ),
-                                    items: [
-                                      const DropdownMenuItem(value: null, child: Text('Todos')),
-                                      ...usuarios.map((nome) => DropdownMenuItem(value: nome, child: Text(nome))),
-                                    ],
-                                    onChanged: (value) {
-                                      setState(() {
-                                        usuarioSelecionado = value;
-                                      });
-                                    },
+                                  child: DropdownButtonFormField<String?>(
+                                value: funcionarioSelecionado,
+                                decoration: const InputDecoration(
+                                  labelText: 'Funcionário',
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  border: OutlineInputBorder(),
+                                ),
+                                items: [
+                                  const DropdownMenuItem<String?>(
+                                    value: null,
+                                    child: Text('Todos'),
                                   ),
+                                  ...usuarios.map(
+                                    (nome) => DropdownMenuItem<String?>(
+                                      value: nome,
+                                      child: Text(nome),
+                                    ),
+                                  ),
+                                ],
+                                onChanged: (value) {
+                                  setState(() {
+                                    funcionarioSelecionado = value;
+                                  });
+                                },
+                              ),
+
                                 ),
                                 const SizedBox(width: 10),
                                 // Filtro por Forma de Pagamento

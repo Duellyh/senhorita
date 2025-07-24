@@ -476,7 +476,6 @@ Future<void> realizarVenda() async {
               }
             : null,
         'clienteId': clienteSelecionado?['id'],
-        'nomeUsuario': nomeUsuario,
         'usuarioId': FirebaseAuth.instance.currentUser?.uid,
         'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
         'lojaSelecionada': FirebaseAuth.instance.currentUser?.uid,
