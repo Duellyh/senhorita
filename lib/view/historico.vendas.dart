@@ -17,6 +17,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+
 class HistoricoVendasView extends StatefulWidget {
   const HistoricoVendasView({super.key});
 
@@ -36,30 +37,12 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
   bool carregandoUsuario = true;
-  String? usuarioSelecionado;
+  String? funcionarioSelecionado;
   String? formaPagamentoSelecionada;
-  String? usuarioSelecionadoId;
-  List<Map<String, dynamic>> funcionarios = [];
 
   List<String> usuarios = []; // preenchido do Firestore
-  List<String> formasPagamento = [
-    'Dinheiro',
-    'Pix',
-    'Cartão Crédito',
-    'Cartão Débito',
-  ];
-  Future<void> carregarFuncionarios() async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('usuarios')
-        .where('tipo', whereIn: ['funcionario', 'admin'])
-        .get();
+  List<String> formasPagamento = ['Dinheiro', 'Pix', 'Cartão Crédito', 'Cartão Débito'];
 
-    setState(() {
-      funcionarios = snapshot.docs.map((doc) {
-        return {'id': doc.id, 'nome': doc['nomeUsuario']};
-      }).toList();
-    });
-  }
 
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
@@ -97,36 +80,29 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
     final telefone = venda['cliente']?['telefone'] ?? '';
     final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
 
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Detalhes da Venda'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Cliente: $cliente'),
-                if (telefone.isNotEmpty) Text('Telefone: $telefone'),
-                Text(
-                  'Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}',
-                ),
-                Text(
-                  "Atendente: ${venda['funcionarioNome'] ?? 'Desconhecido'}",
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  'Itens:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const Divider(),
-                ...itens.map((item) {
-                  final precoFinal = item['precoFinal'] ?? 0.0;
-                  final quantidade = item['quantidade'] ?? 1;
-                  final desconto = item['desconto'];
-                  final precoPromocional = item['precoPromocional'];
-                  final totalItem = precoFinal * quantidade;
+  showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Detalhes da Venda'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Cliente: $cliente'),
+              if (telefone.isNotEmpty) Text('Telefone: $telefone'),
+              Text('Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}'),
+              Text("Atendente: ${venda['nomeUsuario']}"),
+              const SizedBox(height: 10),
+              const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Divider(),
+              ...itens.map((item) {
+                final precoFinal = item['precoFinal'] ?? 0.0;
+                final quantidade = item['quantidade'] ?? 1;
+                final desconto = item['desconto'];
+                final precoPromocional = item['precoPromocional'];
+                final totalItem = precoFinal * quantidade;
 
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -188,42 +164,41 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
     );
   }
 
-  Stream<List<DocumentSnapshot>> _getVendasStream() {
-    final DateTime dataInicial = _getDataInicial();
-    final DateTime dataFinal = _getDataFinal();
+Stream<List<DocumentSnapshot>> _getVendasStream() {
+  return FirebaseFirestore.instance
+      .collection('vendas')
+      .orderBy('dataVenda', descending: true)
+      .snapshots()
+      .map((snapshot) {
+    final docsFiltrados = snapshot.docs.where((doc) {
+      final data = doc.data();
 
-    Query<Map<String, dynamic>> query = FirebaseFirestore.instance
-        .collection('vendas')
-        .where('dataVenda', isGreaterThanOrEqualTo: dataInicial)
-        .where('dataVenda', isLessThanOrEqualTo: dataFinal)
-        .orderBy('dataVenda', descending: true);
+      // Filtro por nomeUsuario
+      if (usuarioSelecionado != null &&
+          (data['nomeUsuario']?.toString().toLowerCase() !=
+              usuarioSelecionado!.toLowerCase())) {
+        return false;
+      }
 
-    // Filtro por funcionário
-    if (usuarioSelecionadoId != null) {
-      query = query.where('funcionarioId', isEqualTo: usuarioSelecionadoId);
-    }
+      // Filtro por forma de pagamento
+      if (formaPagamentoSelecionada != null) {
+        final pagamentos = (data['pagamentos'] as List?)
+            ?.map((e) => e['forma']?.toString())
+            .toList();
 
-    return query.snapshots().map((snapshot) {
-      final docsFiltrados = snapshot.docs.where((doc) {
-        final data = doc.data();
-
-        // Filtro por forma de pagamento (cliente)
-        if (formaPagamentoSelecionada != null) {
-          final pagamentos = (data['pagamentos'] as List?)
-              ?.map((e) => e['forma']?.toString())
-              .toList();
-          if (pagamentos == null ||
-              !pagamentos.contains(formaPagamentoSelecionada)) {
-            return false;
-          }
+        if (pagamentos == null ||
+            !pagamentos.contains(formaPagamentoSelecionada)) {
+          return false;
         }
+      }
 
         return true;
       }).toList();
 
-      return docsFiltrados;
-    });
-  }
+    return docsFiltrados;
+  });
+}
+
 
   Future<void> _selecionarIntervaloDatas() async {
     final hoje = DateTime.now();
@@ -434,39 +409,28 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
     final frete = venda['frete'] ?? 0.0;
     final total = venda['totalVenda'] ?? 0.0;
 
-    pdf.addPage(
-      pw.Page(
-        build: (context) => pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Text(
-              "SENHORITA CINTAS",
-              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
-            ),
-            pw.SizedBox(height: 4),
-            pw.Text(
-              "COMPROVANTE DE VENDA",
-              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
-            ),
-            pw.SizedBox(height: 4),
-            pw.Text("Atendente: ${venda['nomeUsuario']}"),
-            pw.Text("Cliente: $cliente"),
-            if (telefone.isNotEmpty) pw.Text("Telefone: $telefone"),
-            pw.Text(
-              "Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}",
-            ),
-            pw.SizedBox(height: 10),
-            pw.Text(
-              "Itens:",
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-            ),
-            pw.Divider(),
-            ...itens.map((item) {
-              final quantidade = item['quantidade'] ?? 1;
-              final precoFinal = item['precoFinal'] ?? 0.0;
-              final desconto = item['desconto'] ?? 0.0;
-              final precoPromocional = item['precoPromocional'] ?? 0.0;
-              final totalItem = precoFinal * quantidade;
+  pdf.addPage(
+    pw.Page(
+      build: (context) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text("SENHORITA CINTAS", style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 4),
+          pw.Text("COMPROVANTE DE VENDA", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 4),
+          pw.Text("Atendente: ${venda['nomeUsuario']}"),
+          pw.Text("Cliente: $cliente"),
+          if (telefone.isNotEmpty) pw.Text("Telefone: $telefone"),
+          pw.Text("Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}"),
+          pw.SizedBox(height: 10),
+          pw.Text("Itens:", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Divider(),
+          ...itens.map((item) {
+            final quantidade = item['quantidade'] ?? 1;
+            final precoFinal = item['precoFinal'] ?? 0.0;
+            final desconto = item['desconto'] ?? 0.0;
+            final precoPromocional = item['precoPromocional'] ?? 0.0;
+            final totalItem = precoFinal * quantidade;
 
               return pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -523,111 +487,80 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
     Printing.layoutPdf(onLayout: (format) => pdf.save());
   }
 
-  Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
-    final total = venda['total'] ?? 0;
-    final data = DateTime.tryParse(venda['dataVenda'] ?? '');
-    final itens = venda['itens'] as List<dynamic>? ?? [];
-    final cliente = venda['cliente'] ?? 'Não informado';
-    final frete = venda['frete'] ?? 0.0;
-    final nomeUsuario = venda['funcionarioNome'] ?? 'Desconhecido';
-    final pagamentos = venda['pagamentos'] as List<dynamic>? ?? [];
-    final formaPagamento = pagamentos.isNotEmpty
-        ? pagamentos
-              .map(
-                (p) =>
-                    '${p['forma']}: R\$ ${(p['valor'] ?? 0).toStringAsFixed(2)}',
-              )
-              .join(' | ')
-        : 'N/A';
+Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
+  final total = venda['total'] ?? 0;
+  final data = DateTime.tryParse(venda['dataVenda'] ?? '');
+  final itens = venda['itens'] as List<dynamic>? ?? [];
+  final cliente = venda['cliente'] ?? 'Não informado';
+  final frete = venda['frete'] ?? 0.0;
+  final nomeUsuario = venda['nomeUsuario'] ?? 'Desconhecido';
+  final pagamentos = venda['pagamentos'] as List<dynamic>? ?? [];
+  final formaPagamento = pagamentos.isNotEmpty
+      ? pagamentos.map((p) => '${p['forma']}: R\$ ${(p['valor'] ?? 0).toStringAsFixed(2)}').join(' | ')
+      : 'N/A';
 
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      elevation: 4,
-      child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        title: Text(
-          'Venda ${index + 1} - R\$ ${total.toStringAsFixed(2)}',
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+
+  return Card(
+    margin: const EdgeInsets.symmetric(vertical: 8),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    elevation: 4,
+    child: ExpansionTile(
+      tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      title: Text(
+        'Venda ${index + 1} - R\$ ${total.toStringAsFixed(2)}',
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+      ),
+      subtitle: Text(
+        data != null ? DateFormat('dd/MM/yyyy – HH:mm').format(data) : 'Data inválida',
+        style: const TextStyle(color: Colors.grey),
+      ),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('👤 Cliente: $cliente'),
+              Text('🚚 Frete: R\$ ${frete.toStringAsFixed(2)}'),
+              Text('👩‍💼 Usuário: $nomeUsuario'),
+              Text('💳 Pagamentos: $formaPagamento'),
+              const Divider(),
+              const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
         ),
-        subtitle: Text(
-          data != null
-              ? DateFormat('dd/MM/yyyy – HH:mm').format(data)
-              : 'Data inválida',
-          style: const TextStyle(color: Colors.grey),
-        ),
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Column(
+        ...itens.map((item) {
+          return ListTile(
+            leading: const Icon(Icons.shopping_bag_outlined, color: Colors.purple),
+            title: Text(item['produtoNome'] ?? 'Produto'),
+            subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('👤 Cliente: $cliente'),
-                Text('🚚 Frete: R\$ ${frete.toStringAsFixed(2)}'),
-                Text('👩‍💼 Usuário: $nomeUsuario'),
-                Text('💳 Pagamentos: $formaPagamento'),
-                const Divider(),
-                const Text(
-                  'Itens:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
+                if ((item['tamanho'] ?? '').toString().isNotEmpty)
+                  Text('Tamanho: ${item['tamanho']}'),
+                Text('Qtd: ${item['quantidade']}'),
+                Text('Valor unitário: R\$ ${(item['precoFinal'] ?? 0).toStringAsFixed(2)}'),
               ],
             ),
-          ),
-          ...itens.map((item) {
-            return ListTile(
-              leading: const Icon(
-                Icons.shopping_bag_outlined,
-                color: Colors.purple,
-              ),
-              title: Text(item['produtoNome'] ?? 'Produto'),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if ((item['tamanho'] ?? '').toString().isNotEmpty)
-                    Text('Tamanho: ${item['tamanho']}'),
-                  Text('Qtd: ${item['quantidade']}'),
-                  Text(
-                    'Valor unitário: R\$ ${(item['precoFinal'] ?? 0).toStringAsFixed(2)}',
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _carregarUsuarios() async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('usuarios')
-        .get();
-    setState(() {
-      usuarios = snapshot.docs.map((doc) => doc['nome'] as String).toList();
-    });
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _carregarFiltros();
-    buscarTipoUsuario();
-    _carregarUsuarios();
-    buscarFuncionarios();
-    carregarFuncionarios();
-  }
-
-  Future<List<Map<String, dynamic>>> buscarFuncionarios() async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('usuarios')
-        .where('tipo', whereIn: ['funcionario', 'admin'])
-        .get();
-
-    return snapshot.docs.map((doc) {
-      return {'id': doc.id, 'nome': doc['nome'] ?? ''};
-    }).toList();
-  }
+          );
+        }).toList(),
+      ],
+    ),
+  );
+}
+Future<void> _carregarUsuarios() async {
+  final snapshot = await FirebaseFirestore.instance.collection('usuarios').get();
+  setState(() {
+    usuarios = snapshot.docs.map((doc) => doc['nome'] as String).toList();
+  });
+}
+@override
+void initState() {
+  super.initState();
+  _carregarFiltros();
+  buscarTipoUsuario();
+  _carregarUsuarios();
+}
 
   Future<void> _carregarFiltros() async {
     try {
@@ -641,34 +574,34 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
       for (var doc in snapshot.docs) {
         final data = doc.data();
 
-        // Pegando o nome do usuário
-        final nome = data['nomeUsuario'];
-        if (nome != null && nome.toString().trim().isNotEmpty) {
-          nomes.add(nome.toString().trim());
-        }
+      // Pegando o nome do usuário
+      final nome = data['nomeUsuario'];
+      if (nome != null && nome.toString().trim().isNotEmpty) {
+        nomes.add(nome.toString().trim());
+      }
 
-        // Pegando formas de pagamento dentro da lista 'pagamentos'
-        final pagamentos = data['pagamentos'];
-        if (pagamentos != null && pagamentos is List) {
-          for (var pagamento in pagamentos) {
-            if (pagamento is Map && pagamento.containsKey('forma')) {
-              final forma = pagamento['forma'];
-              if (forma != null && forma.toString().trim().isNotEmpty) {
-                formas.add(forma.toString().trim());
-              }
+      // Pegando formas de pagamento dentro da lista 'pagamentos'
+      final pagamentos = data['pagamentos'];
+      if (pagamentos != null && pagamentos is List) {
+        for (var pagamento in pagamentos) {
+          if (pagamento is Map && pagamento.containsKey('forma')) {
+            final forma = pagamento['forma'];
+            if (forma != null && forma.toString().trim().isNotEmpty) {
+              formas.add(forma.toString().trim());
             }
           }
         }
       }
-
-      setState(() {
-        usuarios = nomes.toList()..sort();
-        formasPagamento = formas.toList()..sort();
-      });
-    } catch (e) {
-      print('Erro ao carregar filtros: $e');
     }
+
+    setState(() {
+      usuarios = nomes.toList()..sort();
+      formasPagamento = formas.toList()..sort();
+    });
+  } catch (e) {
+    print('Erro ao carregar filtros: $e');
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -819,98 +752,70 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
                   ),
                 ),
 
-                // Exibe intervalo de data se for personalizado
-                if (filtroSelecionado == 'personalizado' &&
-                    intervaloPersonalizado != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 4,
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.date_range, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.start)} até '
-                          '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.end)}',
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ],
-                    ),
-                  ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  child: Row(
-                    children: [
-                      // Filtro por Funcionário
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: usuarioSelecionado,
-                          items: funcionarios.map((usuario) {
-                            return DropdownMenuItem<String>(
-                              value: usuario['nome'], // salva o nome
-                              child: Text(usuario['nome']),
-                            );
-                          }).toList(),
-                          onChanged: (String? novoValor) {
-                            setState(() {
-                              usuarioSelecionado = novoValor;
-
-                              // Encontra o funcionário correspondente pelo nome
-                              final funcionario = funcionarios.firstWhere(
-                                (f) => f['nome'] == novoValor,
-                                orElse: () => {'id': null, 'nome': ''},
-                              );
-
-                              // Pega o ID se existir
-                              usuarioSelecionadoId = funcionario != null
-                                  ? funcionario['id']
-                                  : null;
-                            });
-                          },
-                          decoration: const InputDecoration(
-                            labelText: 'Funcionário',
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      // Filtro por Forma de Pagamento
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: formaPagamentoSelecionada,
-                          decoration: const InputDecoration(
-                            labelText: 'Pagamento',
-                            contentPadding: EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            border: OutlineInputBorder(),
-                          ),
-                          items: [
-                            const DropdownMenuItem(
-                              value: null,
-                              child: Text('Todas'),
-                            ),
-                            ...formasPagamento.map(
-                              (fp) =>
-                                  DropdownMenuItem(value: fp, child: Text(fp)),
+                    // Exibe intervalo de data se for personalizado
+                    if (filtroSelecionado == 'personalizado' && intervaloPersonalizado != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.date_range, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.start)} até '
+                              '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.end)}',
+                              style: const TextStyle(fontSize: 14),
                             ),
                           ],
-                          onChanged: (value) {
-                            setState(() {
-                              formaPagamentoSelecionada = value;
-                            });
-                          },
                         ),
                       ),
-                    ],
-                  ),
-                ),
+                                                Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            child: Row(
+                              children: [
+                                // Filtro por Funcionário
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: usuarioSelecionado,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Funcionário',
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Todos')),
+                                      ...usuarios.map((nome) => DropdownMenuItem(value: nome, child: Text(nome))),
+                                    ],
+                                    onChanged: (value) {
+                                      setState(() {
+                                        usuarioSelecionado = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                // Filtro por Forma de Pagamento
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: formaPagamentoSelecionada,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Pagamento',
+                                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: [
+                                      const DropdownMenuItem(value: null, child: Text('Todas')),
+                                      ...formasPagamento.map((fp) => DropdownMenuItem(value: fp, child: Text(fp))),
+                                    ],
+                                    onChanged: (value) {
+                                      setState(() {
+                                        formaPagamentoSelecionada = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
 
                 // Lista de vendas
                 Expanded(
