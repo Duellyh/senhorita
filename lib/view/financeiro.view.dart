@@ -70,13 +70,18 @@ class _FinanceiroViewState extends State<FinanceiroView> {
   Future<void> _exportarPDF() async {
     final agora = DateTime.now();
     final inicioFiltro = dataInicio ?? DateTime(agora.year, agora.month, 1);
-    final fimFiltro = dataFim ?? DateTime.now();
+    final fimFiltro = (dataFim ?? DateTime.now()).add(
+      const Duration(hours: 23, minutes: 59, seconds: 59),
+    );
 
     final snapshot = await FirebaseFirestore.instance
         .collection('vendas')
         .where('dataVenda', isGreaterThanOrEqualTo: inicioFiltro)
         .where('dataVenda', isLessThanOrEqualTo: fimFiltro)
         .get();
+
+    // DEBUG opcional: veja quantas vendas foram encontradas
+    print('🔍 Vendas encontradas para o PDF: ${snapshot.docs.length}');
 
     final pdf = pw.Document();
 
@@ -95,7 +100,9 @@ class _FinanceiroViewState extends State<FinanceiroView> {
             ),
             pw.SizedBox(height: 8),
             pw.Text('Total de Vendas: $totalVendas'),
-            pw.Text('Total do Mês: R\$ ${totalMes.toStringAsFixed(2)}'),
+            pw.Text(
+              'Total de Vendas no Periodo: R\$ ${totalMes.toStringAsFixed(2)}',
+            ),
             pw.Text('Total de Hoje: R\$ ${totalHoje.toStringAsFixed(2)}'),
             pw.Text(
               'Valor Gasto Total: R\$ ${valorGastoTotal.toStringAsFixed(2)}',
@@ -110,15 +117,21 @@ class _FinanceiroViewState extends State<FinanceiroView> {
               style: pw.TextStyle(fontSize: 18),
             ),
             pw.SizedBox(height: 8),
+
             pw.Table.fromTextArray(
               headers: ['Data', 'Valor', 'Formas de Pagamento', 'Funcionário'],
               data: snapshot.docs.map((doc) {
-                final data = (doc['dataVenda'] as Timestamp).toDate();
-                final valor = (doc['totalVenda'] ?? 0).toDouble();
-                final formas = (doc['formasPagamento'] as List).join(', ');
-                final funcionario = doc['funcionario'] ?? '';
+                final data = doc.data();
+                final valor = (data['totalVenda'] ?? 0).toDouble();
+                final dataVenda = (data['dataVenda'] as Timestamp).toDate();
+                final formas =
+                    (data['formasPagamento'] as List?)?.join(', ') ?? '-';
+                final funcionario = data.containsKey('funcionario')
+                    ? data['funcionario']
+                    : '-';
+
                 return [
-                  DateFormat('dd/MM/yyyy').format(data),
+                  DateFormat('dd/MM/yyyy').format(dataVenda),
                   'R\$ ${valor.toStringAsFixed(2)}',
                   formas,
                   funcionario,
@@ -308,7 +321,10 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     for (var doc in snapshot.docs) {
       final data = (doc['dataVenda'] as Timestamp).toDate();
       final valor = (doc['totalVenda'] ?? 0).toDouble();
-      final funcionario = doc['funcionario'] ?? 'Desconhecido';
+      final dataDoc = doc.data();
+      final funcionario = dataDoc.containsKey('funcionario')
+          ? dataDoc['funcionario'] ?? 'Desconhecido'
+          : 'Desconhecido';
 
       // Acumula por dia
       final diaStr = DateFormat('dd/MM').format(data);

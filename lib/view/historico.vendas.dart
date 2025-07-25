@@ -18,7 +18,6 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:diacritic/diacritic.dart';
 
-
 class HistoricoVendasView extends StatefulWidget {
   const HistoricoVendasView({super.key});
 
@@ -46,10 +45,12 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
   List<String> usuarios = []; // preenchido do Firestore
   List<String> formasPagamento = ['Dinheiro', 'Pix', 'Crédito', 'Débito'];
 
-
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
-      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .get();
       setState(() {
         tipoUsuario = doc['tipo'] ?? 'funcionario';
         nomeUsuario = doc['nome'] ?? '';
@@ -57,6 +58,7 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
       });
     }
   }
+
   DateTime _getDataInicial() {
     final agora = DateTime.now();
     switch (filtroSelecionado) {
@@ -72,125 +74,152 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
         return DateTime(agora.year, agora.month, agora.day);
     }
   }
+
   void _mostrarDetalhesVenda(Map<String, dynamic> venda) {
-  final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
-  final cliente = venda['cliente']?['nome'] ?? 'Não informado';
-  final telefone = venda['cliente']?['telefone'] ?? '';
-  final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
+    final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
+    final cliente = venda['cliente']?['nome'] ?? 'Não informado';
+    final telefone = venda['cliente']?['telefone'] ?? '';
+    final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
 
-  showDialog(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('Detalhes da Venda'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Cliente: $cliente'),
-              if (telefone.isNotEmpty) Text('Telefone: $telefone'),
-              Text('Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}'),
-              Text("Atendente: ${venda['funcionario'] ?? 'Não informado'}"),
-              const SizedBox(height: 10),
-              const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
-              const Divider(),
-              ...itens.map((item) {
-                final precoFinal = item['precoFinal'] ?? 0.0;
-                final quantidade = item['quantidade'] ?? 1;
-                final desconto = item['desconto'];
-                final precoPromocional = item['precoPromocional'];
-                final totalItem = precoFinal * quantidade;
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Detalhes da Venda'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Cliente: $cliente'),
+                if (telefone.isNotEmpty) Text('Telefone: $telefone'),
+                Text(
+                  'Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}',
+                ),
+                Text("Atendente: ${venda['funcionario'] ?? 'Não informado'}"),
+                const SizedBox(height: 10),
+                const Text(
+                  'Itens:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const Divider(),
+                ...itens.map((item) {
+                  final precoFinal = item['precoFinal'] ?? 0.0;
+                  final quantidade = item['quantidade'] ?? 1;
+                  final desconto = item['desconto'];
+                  final precoPromocional = item['precoPromocional'];
+                  final totalItem = precoFinal * quantidade;
 
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${item['produtoNome'] ?? 'Produto'}'
-                        ' ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}'),
-                    Text('Quantidade: $quantidade | Unitário: R\$ ${precoFinal.toStringAsFixed(2)}'
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${item['produtoNome'] ?? 'Produto'}'
+                        ' ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}',
+                      ),
+                      Text(
+                        'Quantidade: $quantidade | Unitário: R\$ ${precoFinal.toStringAsFixed(2)}'
                         '${desconto != null ? ' | Desconto: R\$ ${desconto.toStringAsFixed(2)}' : ''}'
-                        '${precoPromocional != null && precoPromocional > 0 ? ' | Promo: R\$ ${precoPromocional.toStringAsFixed(2)}' : ''}'),
-                    Text('Subtotal: R\$ ${totalItem.toStringAsFixed(2)}'),
-                    const Divider(),
-                  ],
-                );
-              }),
-              const SizedBox(height: 10),
-              Text('Frete: R\$ ${venda['frete']?.toStringAsFixed(2) ?? '0.00'}'),
+                        '${precoPromocional != null && precoPromocional > 0 ? ' | Promo: R\$ ${precoPromocional.toStringAsFixed(2)}' : ''}',
+                      ),
+                      Text('Subtotal: R\$ ${totalItem.toStringAsFixed(2)}'),
+                      const Divider(),
+                    ],
+                  );
+                }),
+                const SizedBox(height: 10),
+                Text(
+                  'Frete: R\$ ${venda['frete']?.toStringAsFixed(2) ?? '0.00'}',
+                ),
 
-              Text('Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}'
-                  , style: const TextStyle(fontWeight: FontWeight.bold) ),
-              Text(
-                'Total com Frete: R\$ ${((venda['totalVenda'] ?? 0.0) + (venda['frete'] ?? 0.0)).toStringAsFixed(2)}',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text('Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}'),              
-              Text('Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}'),
-              Text('Forma de Pagamento: ${(venda['formasPagamento'] as List<dynamic>).join(" / ")}'),
-
-            ],
+                Text(
+                  'Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  'Total com Frete: R\$ ${((venda['totalVenda'] ?? 0.0) + (venda['frete'] ?? 0.0)).toStringAsFixed(2)}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  'Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}',
+                ),
+                Text(
+                  'Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}',
+                ),
+                Text(
+                  'Forma de Pagamento: ${(venda['formasPagamento'] as List<dynamic>).join(" / ")}',
+                ),
+              ],
+            ),
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Voltar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _imprimirNotaVenda(venda); // Chama a impressão
+            },
+            child: const Text('Imprimir 2ª Via'),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Voltar'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            Navigator.pop(context);
-            _imprimirNotaVenda(venda); // Chama a impressão
-          },
-          child: const Text('Imprimir 2ª Via'),
-        ),
-      ],
-    ),
-  );
-}
+    );
+  }
 
-Stream<List<DocumentSnapshot>> _getVendasStream() {
-  return FirebaseFirestore.instance
-      .collection('vendas')
-      .orderBy('dataVenda', descending: true)
-      .snapshots()
-      .map((snapshot) {
-    final docsFiltrados = snapshot.docs.where((doc) {
-      final data = doc.data();
+  Stream<List<DocumentSnapshot>> _getVendasStream() {
+    return FirebaseFirestore.instance
+        .collection('vendas')
+        .orderBy('dataVenda', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          final docsFiltrados = snapshot.docs.where((doc) {
+            final data = doc.data();
 
-      // Filtro por funcionário
-      if (funcionarioSelecionado != null &&
-          funcionarioSelecionado!.trim().isNotEmpty) {
-        final funcionario = removeDiacritics(data['funcionario']?.toString().toLowerCase().trim() ?? '');
-        final filtroFuncionario = removeDiacritics(funcionarioSelecionado!.toLowerCase().trim());
-        if (funcionario != filtroFuncionario) return false;
-      }
+            // Filtro por funcionário
+            if (funcionarioSelecionado != null &&
+                funcionarioSelecionado!.trim().isNotEmpty) {
+              final funcionario = removeDiacritics(
+                data['funcionario']?.toString().toLowerCase().trim() ?? '',
+              );
+              final filtroFuncionario = removeDiacritics(
+                funcionarioSelecionado!.toLowerCase().trim(),
+              );
+              if (funcionario != filtroFuncionario) return false;
+            }
 
-      // Filtro por forma de pagamento
-      if (formaPagamentoSelecionada != null &&
-          formaPagamentoSelecionada!.trim().isNotEmpty) {
-        final pagamentos = data['pagamentos'] as List?;
-        final formas = pagamentos
-            ?.whereType<Map>()
-            .map((e) => removeDiacritics(e['forma']?.toString().toLowerCase().trim() ?? ''))
-            .toList();
+            // Filtro por forma de pagamento
+            if (formaPagamentoSelecionada != null &&
+                formaPagamentoSelecionada!.trim().isNotEmpty) {
+              final pagamentos = data['pagamentos'] as List?;
+              final formas = pagamentos
+                  ?.whereType<Map>()
+                  .map(
+                    (e) => removeDiacritics(
+                      e['forma']?.toString().toLowerCase().trim() ?? '',
+                    ),
+                  )
+                  .toList();
 
-        final formaSelecionadaNormalizada =
-            removeDiacritics(formaPagamentoSelecionada!.toLowerCase().trim());
+              final formaSelecionadaNormalizada = removeDiacritics(
+                formaPagamentoSelecionada!.toLowerCase().trim(),
+              );
 
-        if (formas == null || !formas.contains(formaSelecionadaNormalizada)) {
-          return false;
-        }
-      }
+              if (formas == null ||
+                  !formas.contains(formaSelecionadaNormalizada)) {
+                return false;
+              }
+            }
 
-      return true;
-    }).toList();
+            return true;
+          }).toList();
 
-    return docsFiltrados;
-  });
-}
-
-
+          return docsFiltrados;
+        });
+  }
 
   Future<void> _selecionarIntervaloDatas() async {
     final hoje = DateTime.now();
@@ -198,7 +227,8 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
       context: context,
       firstDate: DateTime(2023),
       lastDate: DateTime(hoje.year, hoje.month, hoje.day + 1),
-      initialDateRange: intervaloPersonalizado ??
+      initialDateRange:
+          intervaloPersonalizado ??
           DateTimeRange(
             start: DateTime(hoje.year, hoje.month, hoje.day),
             end: DateTime(hoje.year, hoje.month, hoje.day),
@@ -211,6 +241,7 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
       });
     }
   }
+
   DateTime _getDataFinal() {
     final agora = DateTime.now();
     return filtroSelecionado == 'personalizado'
@@ -231,7 +262,9 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                title: Text('Início: ${DateFormat('dd/MM/yyyy').format(dataInicialTemp)}'),
+                title: Text(
+                  'Início: ${DateFormat('dd/MM/yyyy').format(dataInicialTemp)}',
+                ),
                 trailing: const Icon(Icons.calendar_today),
                 onTap: () async {
                   final data = await showDatePicker(
@@ -245,7 +278,9 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
                 },
               ),
               ListTile(
-                title: Text('Fim: ${DateFormat('dd/MM/yyyy').format(dataFinalTemp)}'),
+                title: Text(
+                  'Fim: ${DateFormat('dd/MM/yyyy').format(dataFinalTemp)}',
+                ),
                 trailing: const Icon(Icons.calendar_today),
                 onTap: () async {
                   final data = await showDatePicker(
@@ -261,11 +296,17 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
             ElevatedButton(
               onPressed: () {
                 setState(() {
-                  intervaloPersonalizado = DateTimeRange(start: dataInicialTemp, end: dataFinalTemp);
+                  intervaloPersonalizado = DateTimeRange(
+                    start: dataInicialTemp,
+                    end: dataFinalTemp,
+                  );
                   filtroSelecionado = 'personalizado';
                 });
                 Navigator.pop(context);
@@ -297,11 +338,16 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
                 }
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: isSelecionado ? Colors.purple[100] : Colors.grey[200],
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: isSelecionado ? Colors.purple : Colors.grey),
+                  border: Border.all(
+                    color: isSelecionado ? Colors.purple : Colors.grey,
+                  ),
                 ),
                 child: Row(
                   children: [
@@ -314,11 +360,13 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
                     Text(
                       isPersonalizado
                           ? intervaloPersonalizado != null
-                              ? '${DateFormat('dd/MM').format(intervaloPersonalizado!.start)} - ${DateFormat('dd/MM').format(intervaloPersonalizado!.end)}'
-                              : 'Personalizado'
+                                ? '${DateFormat('dd/MM').format(intervaloPersonalizado!.start)} - ${DateFormat('dd/MM').format(intervaloPersonalizado!.end)}'
+                                : 'Personalizado'
                           : filtro.toUpperCase(),
                       style: TextStyle(
-                        fontWeight: isSelecionado ? FontWeight.bold : FontWeight.normal,
+                        fontWeight: isSelecionado
+                            ? FontWeight.bold
+                            : FontWeight.normal,
                         color: isSelecionado ? Colors.purple : Colors.black,
                       ),
                     ),
@@ -332,258 +380,319 @@ Stream<List<DocumentSnapshot>> _getVendasStream() {
     );
   }
 
-Widget _buildFiltrosExtras() {
-  return Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-    child: Row(
-      children: [
-        Expanded(
-          child: DropdownButtonFormField<String>(
-            decoration: const InputDecoration(labelText: 'Usuário'),
-            value: filtroUsuario,
-            onChanged: (value) => setState(() => filtroUsuario = value),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('Todos')),
-              ...usuarios.map((u) =>
-                  DropdownMenuItem(value: u, child: Text(u))),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: DropdownButtonFormField<String>(
-            decoration: const InputDecoration(labelText: 'Forma Pagamento'),
-            value: filtroFormaPagamento,
-            onChanged: (value) => setState(() => filtroFormaPagamento = value),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('Todas')),
-              ...formasPagamento.map((f) =>
-                  DropdownMenuItem(value: f, child: Text(f))),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-
-void _imprimirNotaVenda(Map<String, dynamic> venda) {
-  final pdf = pw.Document();
-  final cliente = venda['cliente']?['nome'] ?? 'CONSUMIDOR';
-  final telefone = venda['cliente']?['telefone'] ?? '';
-  final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
-  final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
-  final formasPagamento = (venda['formasPagamento'] as List).join(" / ");
-  final frete = venda['frete'] ?? 0.0;
-  final total = venda['totalVenda'] ?? 0.0;
-
-  pdf.addPage(
-    pw.Page(
-      build: (context) => pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
+  Widget _buildFiltrosExtras() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(
         children: [
-          pw.Text("SENHORITA CINTAS", style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 4),
-          pw.Text("COMPROVANTE DE VENDA", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 4),
-          pw.Text("Atendente: ${venda['funcionario']}"),
-          pw.Text("Cliente: $cliente"),
-          if (telefone.isNotEmpty) pw.Text("Telefone: $telefone"),
-          pw.Text("Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}"),
-          pw.SizedBox(height: 10),
-          pw.Text("Itens:", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          pw.Divider(),
-          ...itens.map((item) {
-            final quantidade = item['quantidade'] ?? 1;
-            final precoFinal = item['precoFinal'] ?? 0.0;
-            final desconto = item['desconto'] ?? 0.0;
-            final precoPromocional = item['precoPromocional'] ?? 0.0;
-            final totalItem = precoFinal * quantidade;
-
-            return pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                if (desconto > 0 || precoPromocional > 0)
-                  pw.Text(">> PRODUTO EM PROMOÇÃO <<",
-                      style: pw.TextStyle(color: PdfColors.red, fontWeight: pw.FontWeight.bold)),
-                pw.Text("${item['produtoNome']} ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}"),
-                pw.Text("Quantidade: $quantidade - Unitário: R\$ ${precoFinal.toStringAsFixed(2)}"
-                    "${desconto > 0 ? ' | Desc: R\$ ${desconto.toStringAsFixed(2)}' : ''}"
-                    "${precoPromocional > 0 ? ' | Promo: R\$ ${precoPromocional.toStringAsFixed(2)}' : ''}"),
-                pw.Text("Subtotal: R\$ ${totalItem.toStringAsFixed(2)}"),
-                pw.Divider(),
-              ],
-            );
-          }),
-          pw.SizedBox(height: 10),
-          pw.Text("Frete: R\$ ${frete.toStringAsFixed(2)}"),
-          pw.Text("Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}",
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),              
-          pw.Text("Total com Frete: R\$ ${(total + frete).toStringAsFixed(2)}",
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          pw.Text("Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}"),
-          pw.Text("Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}"),
-          pw.SizedBox(height: 10),
-          pw.Text("Forma de Pagamento: $formasPagamento"),
-          pw.SizedBox(height: 10),
-          pw.Text("Obrigada pela preferência!", style: pw.TextStyle(fontSize: 12)),
-        ],
-      ),
-    ),
-  );
-
-  Printing.layoutPdf(onLayout: (format) => pdf.save());
-}
-
-Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
-  final total = venda['total'] ?? 0;
-  final data = DateTime.tryParse(venda['dataVenda'] ?? '');
-  final itens = venda['itens'] as List<dynamic>? ?? [];
-  final cliente = venda['cliente'] ?? 'Não informado';
-  final frete = venda['frete'] ?? 0.0;
-  final funcionarioSelecionado = venda['funcionario']?['nome'] ?? 'Não informado';
-  final pagamentos = venda['pagamentos'] as List<dynamic>? ?? [];
-  final formaPagamento = pagamentos.isNotEmpty
-      ? pagamentos.map((p) => '${p['forma']}: R\$ ${(p['valor'] ?? 0).toStringAsFixed(2)}').join(' | ')
-      : 'N/A';
-
-
-  return Card(
-    margin: const EdgeInsets.symmetric(vertical: 8),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    elevation: 4,
-    child: ExpansionTile(
-      tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      title: Text(
-        'Venda ${index + 1} - R\$ ${total.toStringAsFixed(2)}',
-        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-      ),
-      subtitle: Text(
-        data != null ? DateFormat('dd/MM/yyyy – HH:mm').format(data) : 'Data inválida',
-        style: const TextStyle(color: Colors.grey),
-      ),
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('👤 Cliente: $cliente'),
-              Text('🚚 Frete: R\$ ${frete.toStringAsFixed(2)}'),
-              Text('👩‍💼 Funcionario: $funcionarioSelecionado'),
-              Text('💳 Pagamentos: $formaPagamento'),
-              const Divider(),
-              const Text('Itens:', style: TextStyle(fontWeight: FontWeight.bold)),
-            ],
-          ),
-        ),
-        ...itens.map((item) {
-          return ListTile(
-            leading: const Icon(Icons.shopping_bag_outlined, color: Colors.purple),
-            title: Text(item['produtoNome'] ?? 'Produto'),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if ((item['tamanho'] ?? '').toString().isNotEmpty)
-                  Text('Tamanho: ${item['tamanho']}'),
-                Text('Qtd: ${item['quantidade']}'),
-                Text('Valor unitário: R\$ ${(item['precoFinal'] ?? 0).toStringAsFixed(2)}'),
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              decoration: const InputDecoration(labelText: 'Usuário'),
+              value: filtroUsuario,
+              onChanged: (value) => setState(() => filtroUsuario = value),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('Todos')),
+                ...usuarios.map(
+                  (u) => DropdownMenuItem(value: u, child: Text(u)),
+                ),
               ],
             ),
-          );
-        }).toList(),
-      ],
-    ),
-  );
-}
-Future<void> _carregarUsuarios() async {
-  final snapshot = await FirebaseFirestore.instance.collection('usuarios').get();
-  setState(() {
-    usuarios = snapshot.docs.map((doc) => doc['nome'] as String).toList();
-  });
-}
-@override
-void initState() {
-  super.initState();
-  _carregarFiltros();
-  buscarTipoUsuario();
-  _carregarUsuarios();
-  buscarFuncionarios().then((funcionarios) {
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              decoration: const InputDecoration(labelText: 'Forma Pagamento'),
+              value: filtroFormaPagamento,
+              onChanged: (value) =>
+                  setState(() => filtroFormaPagamento = value),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('Todas')),
+                ...formasPagamento.map(
+                  (f) => DropdownMenuItem(value: f, child: Text(f)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _imprimirNotaVenda(Map<String, dynamic> venda) {
+    final pdf = pw.Document();
+    final cliente = venda['cliente']?['nome'] ?? 'CONSUMIDOR';
+    final telefone = venda['cliente']?['telefone'] ?? '';
+    final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
+    final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
+    final formasPagamento = (venda['formasPagamento'] as List).join(" / ");
+    final frete = venda['frete'] ?? 0.0;
+    final total = venda['totalVenda'] ?? 0.0;
+
+    pdf.addPage(
+      pw.Page(
+        build: (context) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              "SENHORITA CINTAS",
+              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              "COMPROVANTE DE VENDA",
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text("Atendente: ${venda['funcionario']}"),
+            pw.Text("Cliente: $cliente"),
+            if (telefone.isNotEmpty) pw.Text("Telefone: $telefone"),
+            pw.Text(
+              "Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}",
+            ),
+            pw.SizedBox(height: 10),
+            pw.Text(
+              "Itens:",
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            ),
+            pw.Divider(),
+            ...itens.map((item) {
+              final quantidade = item['quantidade'] ?? 1;
+              final precoFinal = item['precoFinal'] ?? 0.0;
+              final desconto = item['desconto'] ?? 0.0;
+              final precoPromocional = item['precoPromocional'] ?? 0.0;
+              final totalItem = precoFinal * quantidade;
+
+              return pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  if (desconto > 0 || precoPromocional > 0)
+                    pw.Text(
+                      ">> PRODUTO EM PROMOÇÃO <<",
+                      style: pw.TextStyle(
+                        color: PdfColors.red,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                  pw.Text(
+                    "${item['produtoNome']} ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}",
+                  ),
+                  pw.Text(
+                    "Quantidade: $quantidade - Unitário: R\$ ${precoFinal.toStringAsFixed(2)}"
+                    "${desconto > 0 ? ' | Desc: R\$ ${desconto.toStringAsFixed(2)}' : ''}"
+                    "${precoPromocional > 0 ? ' | Promo: R\$ ${precoPromocional.toStringAsFixed(2)}' : ''}",
+                  ),
+                  pw.Text("Subtotal: R\$ ${totalItem.toStringAsFixed(2)}"),
+                  pw.Divider(),
+                ],
+              );
+            }),
+            pw.SizedBox(height: 10),
+            pw.Text("Frete: R\$ ${frete.toStringAsFixed(2)}"),
+            pw.Text(
+              "Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}",
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            ),
+            pw.Text(
+              "Total com Frete: R\$ ${(total + frete).toStringAsFixed(2)}",
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            ),
+            pw.Text(
+              "Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}",
+            ),
+            pw.Text(
+              "Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}",
+            ),
+            pw.SizedBox(height: 10),
+            pw.Text("Forma de Pagamento: $formasPagamento"),
+            pw.SizedBox(height: 10),
+            pw.Text(
+              "Obrigada pela preferência!",
+              style: pw.TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    Printing.layoutPdf(onLayout: (format) => pdf.save());
+  }
+
+  Widget _buildVendaCard(Map<String, dynamic> venda, int index) {
+    final total = venda['total'] ?? 0;
+    final data = DateTime.tryParse(venda['dataVenda'] ?? '');
+    final itens = venda['itens'] as List<dynamic>? ?? [];
+    final cliente = venda['cliente'] ?? 'Não informado';
+    final frete = venda['frete'] ?? 0.0;
+    final funcionarioSelecionado =
+        venda['funcionario']?['nome'] ?? 'Não informado';
+    final pagamentos = venda['pagamentos'] as List<dynamic>? ?? [];
+    final formaPagamento = pagamentos.isNotEmpty
+        ? pagamentos
+              .map(
+                (p) =>
+                    '${p['forma']}: R\$ ${(p['valor'] ?? 0).toStringAsFixed(2)}',
+              )
+              .join(' | ')
+        : 'N/A';
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 4,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        title: Text(
+          'Venda ${index + 1} - R\$ ${total.toStringAsFixed(2)}',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        subtitle: Text(
+          data != null
+              ? DateFormat('dd/MM/yyyy – HH:mm').format(data)
+              : 'Data inválida',
+          style: const TextStyle(color: Colors.grey),
+        ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('👤 Cliente: $cliente'),
+                Text('🚚 Frete: R\$ ${frete.toStringAsFixed(2)}'),
+                Text('👩‍💼 Funcionario: $funcionarioSelecionado'),
+                Text('💳 Pagamentos: $formaPagamento'),
+                const Divider(),
+                const Text(
+                  'Itens:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ),
+          ...itens.map((item) {
+            return ListTile(
+              leading: const Icon(
+                Icons.shopping_bag_outlined,
+                color: Colors.purple,
+              ),
+              title: Text(item['produtoNome'] ?? 'Produto'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if ((item['tamanho'] ?? '').toString().isNotEmpty)
+                    Text('Tamanho: ${item['tamanho']}'),
+                  Text('Qtd: ${item['quantidade']}'),
+                  Text(
+                    'Valor unitário: R\$ ${(item['precoFinal'] ?? 0).toStringAsFixed(2)}',
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _carregarUsuarios() async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('usuarios')
+        .get();
     setState(() {
-      usuarios = funcionarios;
+      usuarios = snapshot.docs.map((doc) => doc['nome'] as String).toList();
     });
-  });
-}
-Future<List<String>> buscarFuncionarios() async {
-  final snapshot = await FirebaseFirestore.instance
-      .collection('usuarios')
-      .where('tipo', whereIn: ['funcionario', 'admin'])
-      .get();
+  }
 
-  return snapshot.docs.map((doc) => doc['nomeUsuario'] as String).toList();
-}
+  @override
+  void initState() {
+    super.initState();
+    _carregarFiltros();
+    buscarTipoUsuario();
+    _carregarUsuarios();
+    buscarFuncionarios().then((funcionarios) {
+      setState(() {
+        usuarios = funcionarios;
+      });
+    });
+  }
 
+  Future<List<String>> buscarFuncionarios() async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('usuarios')
+        .where('tipo', whereIn: ['funcionario', 'admin'])
+        .get();
 
-Future<void> _carregarFiltros() async {
-  try {
-    final snapshot = await FirebaseFirestore.instance.collection('vendas').get();
+    return snapshot.docs.map((doc) => doc['nomeUsuario'] as String).toList();
+  }
 
-    final Set<String> nomes = {};
-    final Set<String> formas = {};
+  Future<void> _carregarFiltros() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('vendas')
+          .get();
 
-    for (var doc in snapshot.docs) {
-      final data = doc.data();
+      final Set<String> nomes = {};
+      final Set<String> formas = {};
 
-      // Pegando o nome do funcionário
-      final nome = data['funcionario'];
-      if (nome != null && nome.toString().trim().isNotEmpty) {
-        nomes.add(removeDiacritics(nome.toString().toLowerCase().trim()));
-      }
+      for (var doc in snapshot.docs) {
+        final data = doc.data();
 
-      // Pegando formas de pagamento dentro da lista 'pagamentos'
-      final pagamentos = data['pagamentos'];
-      if (pagamentos != null && pagamentos is List) {
-        for (var pagamento in pagamentos) {
-          if (pagamento is Map && pagamento.containsKey('forma')) {
-            final forma = pagamento['forma'];
-            if (forma != null && forma.toString().trim().isNotEmpty) {
-              formas.add(removeDiacritics(forma.toString().toLowerCase().trim()));
+        // Pegando o nome do funcionário
+        final nome = data['funcionario'];
+        if (nome != null && nome.toString().trim().isNotEmpty) {
+          nomes.add(removeDiacritics(nome.toString().toLowerCase().trim()));
+        }
+
+        // Pegando formas de pagamento dentro da lista 'pagamentos'
+        final pagamentos = data['pagamentos'];
+        if (pagamentos != null && pagamentos is List) {
+          for (var pagamento in pagamentos) {
+            if (pagamento is Map && pagamento.containsKey('forma')) {
+              final forma = pagamento['forma'];
+              if (forma != null && forma.toString().trim().isNotEmpty) {
+                formas.add(
+                  removeDiacritics(forma.toString().toLowerCase().trim()),
+                );
+              }
             }
           }
         }
       }
+
+      setState(() {
+        listaUsuarios = nomes.toList();
+        listaFormasPagamento = formas.toList();
+      });
+    } catch (e) {
+      print('Erro ao carregar filtros: $e');
     }
-
-    setState(() {
-      listaUsuarios = nomes.toList();
-      listaFormasPagamento = formas.toList();
-    });
-  } catch (e) {
-    print('Erro ao carregar filtros: $e');
   }
-}
-
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Histórico de Vendas', style: TextStyle(color: Colors.white)),
+        title: const Text(
+          'Histórico de Vendas',
+          style: TextStyle(color: Colors.white),
+        ),
         backgroundColor: const Color.fromARGB(255, 194, 131, 178),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
-                actions: [
+        actions: [
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
             onPressed: () async {
               await FirebaseAuth.instance.signOut();
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginView()));
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginView()),
+              );
             },
           ),
         ],
       ),
-                  drawer: Drawer(
+      drawer: Drawer(
         child: Container(
           color: primaryColor,
           child: ListView(
@@ -597,167 +706,237 @@ Future<void> _carregarFiltros() async {
                     const Icon(Icons.store, color: Colors.white, size: 48),
                     const SizedBox(height: 8),
                     Text(
-                  'Olá, ${nomeUsuario.toUpperCase()}',
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-
+                      'Olá, ${nomeUsuario.toUpperCase()}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ],
                 ),
               ),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.dashboard, 'Home', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const HomeView()),
+                  );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const VendasView()),
+                );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                );
               }),
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AdicionarProdutosView(),
+                  ),
+                );
               }),
               _menuItem(Icons.people, 'Clientes', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                );
               }),
               _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
-               }),
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const VendasRealizadasView(),
+                  ),
+                );
+              }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.show_chart, 'Relatórios', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                  );
                 }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.settings, 'Configurações', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ConfiguracoesView(),
+                    ),
+                  );
                 }),
             ],
           ),
         ),
       ),
-          body: carregandoUsuario
-              ? const Center(child: CircularProgressIndicator())
-              : Column(
-                  children: [
-                    // Filtros (dia, semana, mês, personalizado)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      color: Colors.grey[100],
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: filtros.map((filtro) {
-                          final isSelecionado = filtroSelecionado == filtro;
-                          return ChoiceChip(
-                            label: Text(
-                              filtro == 'personalizado'
-                                  ? 'Personalizado'
-                                  : filtro[0].toUpperCase() + filtro.substring(1),
-                              style: TextStyle(
-                                color: isSelecionado ? Colors.white : Colors.black,
-                              ),
-                            ),
-                            selected: isSelecionado,
-                            selectedColor: primaryColor,
-                            onSelected: (selected) async {
-                              if (selected) {
-                                if (filtro == 'personalizado') {
-                                  await _selecionarIntervaloDatas();
-                                }
-                                setState(() => filtroSelecionado = filtro);
-                              }
-                            },
-                          );
-                        }).toList(),
-                      ),
-                    ),
+      body: carregandoUsuario
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                // Filtros (dia, semana, mês, personalizado)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  color: Colors.grey[100],
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: filtros.map((filtro) {
+                      final isSelecionado = filtroSelecionado == filtro;
+                      return ChoiceChip(
+                        label: Text(
+                          filtro == 'personalizado'
+                              ? 'Personalizado'
+                              : filtro[0].toUpperCase() + filtro.substring(1),
+                          style: TextStyle(
+                            color: isSelecionado ? Colors.white : Colors.black,
+                          ),
+                        ),
+                        selected: isSelecionado,
+                        selectedColor: primaryColor,
+                        onSelected: (selected) async {
+                          if (selected) {
+                            if (filtro == 'personalizado') {
+                              await _selecionarIntervaloDatas();
+                            }
+                            setState(() => filtroSelecionado = filtro);
+                          }
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ),
 
-                    // Exibe intervalo de data se for personalizado
-                    if (filtroSelecionado == 'personalizado' && intervaloPersonalizado != null)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.date_range, size: 18),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.start)} até '
-                              '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.end)}',
-                              style: const TextStyle(fontSize: 14),
+                // Exibe intervalo de data se for personalizado
+                if (filtroSelecionado == 'personalizado' &&
+                    intervaloPersonalizado != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.date_range, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.start)} até '
+                          '${DateFormat('dd/MM/yyyy').format(intervaloPersonalizado!.end)}',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ],
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  child: Row(
+                    children: [
+                      // Filtro por Funcionário
+                      Expanded(
+                        child: DropdownButtonFormField<String?>(
+                          value: funcionarioSelecionado,
+                          decoration: const InputDecoration(
+                            labelText: 'Funcionário',
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: [
+                            const DropdownMenuItem<String?>(
+                              value: null,
+                              child: Text('Todos'),
+                            ),
+                            ...usuarios.map(
+                              (nome) => DropdownMenuItem<String?>(
+                                value: nome,
+                                child: Text(nome),
+                              ),
                             ),
                           ],
+                          onChanged: (value) {
+                            setState(() {
+                              funcionarioSelecionado = value;
+                            });
+                          },
                         ),
                       ),
-                                                Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                            child: Row(
-                              children: [
-                                // Filtro por Funcionário
-                                Expanded(
-                                  child: DropdownButtonFormField<String?>(
-                                value: funcionarioSelecionado,
-                                decoration: const InputDecoration(
-                                  labelText: 'Funcionário',
-                                  contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  border: OutlineInputBorder(),
-                                ),
-                                items: [
-                                  const DropdownMenuItem<String?>(
-                                    value: null,
-                                    child: Text('Todos'),
-                                  ),
-                                  ...usuarios.map(
-                                    (nome) => DropdownMenuItem<String?>(
-                                      value: nome,
-                                      child: Text(nome),
-                                    ),
-                                  ),
-                                ],
-                                onChanged: (value) {
-                                  setState(() {
-                                    funcionarioSelecionado = value;
-                                  });
-                                },
-                              ),
-
-                                ),
-                                const SizedBox(width: 10),
-                                // Filtro por Forma de Pagamento
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: formaPagamentoSelecionada,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Pagamento',
-                                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                      border: OutlineInputBorder(),
-                                    ),
-                                    items: [
-                                      const DropdownMenuItem(value: null, child: Text('Todas')),
-                                      ...formasPagamento.map((fp) => DropdownMenuItem(value: fp, child: Text(fp))),
-                                    ],
-                                    onChanged: (value) {
-                                      setState(() {
-                                        formaPagamentoSelecionada = value;
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ],
+                      const SizedBox(width: 10),
+                      // Filtro por Forma de Pagamento
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: formaPagamentoSelecionada,
+                          decoration: const InputDecoration(
+                            labelText: 'Pagamento',
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
                             ),
+                            border: OutlineInputBorder(),
                           ),
+                          items: [
+                            const DropdownMenuItem(
+                              value: null,
+                              child: Text('Todas'),
+                            ),
+                            ...formasPagamento.map(
+                              (fp) =>
+                                  DropdownMenuItem(value: fp, child: Text(fp)),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            setState(() {
+                              formaPagamentoSelecionada = value;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
 
-
-                    // Lista de vendas
-                    Expanded(
-                      child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-                        stream:
-                            _getVendasStream().map((vendas) => vendas.map((doc) => doc as QueryDocumentSnapshot<Map<String, dynamic>>).toList()),
+                // Lista de vendas
+                Expanded(
+                  child:
+                      StreamBuilder<
+                        List<QueryDocumentSnapshot<Map<String, dynamic>>>
+                      >(
+                        stream: _getVendasStream().map(
+                          (vendas) => vendas
+                              .map(
+                                (doc) =>
+                                    doc
+                                        as QueryDocumentSnapshot<
+                                          Map<String, dynamic>
+                                        >,
+                              )
+                              .toList(),
+                        ),
                         builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.waiting) {
-                            return const Center(child: CircularProgressIndicator());
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
                           }
                           if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                            return const Center(child: Text('Nenhuma venda encontrada.'));
+                            return const Center(
+                              child: Text('Nenhuma venda encontrada.'),
+                            );
                           }
 
                           final vendas = snapshot.data!;
@@ -766,32 +945,41 @@ Future<void> _carregarFiltros() async {
                             itemCount: vendas.length,
                             itemBuilder: (context, index) {
                               final venda = vendas[index].data();
-                                DateTime dataVenda;
+                              DateTime dataVenda;
 
-                                final rawData = venda['dataVenda'];
+                              final rawData = venda['dataVenda'];
 
-                                if (rawData is Timestamp) {
-                                  dataVenda = rawData.toDate();
-                                } else if (rawData is String) {
-                                  dataVenda = DateTime.tryParse(rawData) ?? DateTime.now();
-                                } else {
-                                  dataVenda = DateTime.now(); // fallback seguro
-                                }
+                              if (rawData is Timestamp) {
+                                dataVenda = rawData.toDate();
+                              } else if (rawData is String) {
+                                dataVenda =
+                                    DateTime.tryParse(rawData) ??
+                                    DateTime.now();
+                              } else {
+                                dataVenda = DateTime.now(); // fallback seguro
+                              }
 
-                              final cliente = venda['cliente']?['nome'] ?? 'Cliente não informado';
+                              final cliente =
+                                  venda['cliente']?['nome'] ??
+                                  'Cliente não informado';
                               final valor = venda['totalVenda'] is int
                                   ? (venda['totalVenda'] as int).toDouble()
                                   : venda['totalVenda'] ?? 0.0;
 
                               return Card(
                                 elevation: 2,
-                                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: ListTile(
-                                  contentPadding:
-                                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 10,
+                                  ),
                                   title: Text(
                                     'R\$ ${valor.toStringAsFixed(2)}',
                                     style: const TextStyle(
@@ -800,7 +988,8 @@ Future<void> _carregarFiltros() async {
                                     ),
                                   ),
                                   subtitle: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       const SizedBox(height: 4),
                                       Text(
@@ -809,13 +998,21 @@ Future<void> _carregarFiltros() async {
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        DateFormat('dd/MM/yyyy – HH:mm').format(dataVenda),
-                                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                        DateFormat(
+                                          'dd/MM/yyyy – HH:mm',
+                                        ).format(dataVenda),
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey,
+                                        ),
                                       ),
                                     ],
                                   ),
                                   trailing: IconButton(
-                                    icon: const Icon(Icons.receipt_long_rounded, color: Colors.purple),
+                                    icon: const Icon(
+                                      Icons.receipt_long_rounded,
+                                      color: Colors.purple,
+                                    ),
                                     onPressed: () {
                                       _mostrarDetalhesVenda(venda);
                                     },
@@ -829,18 +1026,17 @@ Future<void> _carregarFiltros() async {
                           );
                         },
                       ),
-                    ),
-                  ],
                 ),
-
+              ],
+            ),
     );
   }
 }
-  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.white),
-      title: Text(title, style: const TextStyle(color: Colors.white)),
-      onTap: onTap,
-    );
-  }
 
+Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+  return ListTile(
+    leading: Icon(icon, color: Colors.white),
+    title: Text(title, style: const TextStyle(color: Colors.white)),
+    onTap: onTap,
+  );
+}
