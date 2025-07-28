@@ -171,54 +171,62 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
   }
 
   Stream<List<DocumentSnapshot>> _getVendasStream() {
-    return FirebaseFirestore.instance
+    final dataInicial = _getDataInicial();
+    final dataFinal = _getDataFinal().add(
+      const Duration(hours: 23, minutes: 59, seconds: 59),
+    );
+
+    Query query = FirebaseFirestore.instance
         .collection('vendas')
-        .orderBy('dataVenda', descending: true)
-        .snapshots()
-        .map((snapshot) {
-          final docsFiltrados = snapshot.docs.where((doc) {
-            final data = doc.data();
+        .where('dataVenda', isGreaterThanOrEqualTo: dataInicial)
+        .where('dataVenda', isLessThanOrEqualTo: dataFinal)
+        .orderBy('dataVenda', descending: true);
 
-            // Filtro por funcionário
-            if (funcionarioSelecionado != null &&
-                funcionarioSelecionado!.trim().isNotEmpty) {
-              final funcionario = removeDiacritics(
-                data['funcionario']?.toString().toLowerCase().trim() ?? '',
-              );
-              final filtroFuncionario = removeDiacritics(
-                funcionarioSelecionado!.toLowerCase().trim(),
-              );
-              if (funcionario != filtroFuncionario) return false;
-            }
+    return query.snapshots().map((snapshot) {
+      final docsFiltrados = snapshot.docs.where((doc) {
+        final data = doc.data() as Map<String, dynamic>?;
 
-            // Filtro por forma de pagamento
-            if (formaPagamentoSelecionada != null &&
-                formaPagamentoSelecionada!.trim().isNotEmpty) {
-              final pagamentos = data['pagamentos'] as List?;
-              final formas = pagamentos
-                  ?.whereType<Map>()
-                  .map(
-                    (e) => removeDiacritics(
-                      e['forma']?.toString().toLowerCase().trim() ?? '',
-                    ),
-                  )
-                  .toList();
+        if (data == null) return false;
 
-              final formaSelecionadaNormalizada = removeDiacritics(
-                formaPagamentoSelecionada!.toLowerCase().trim(),
-              );
+        // Filtro por funcionário
+        if (funcionarioSelecionado != null &&
+            funcionarioSelecionado!.trim().isNotEmpty) {
+          final funcionario = removeDiacritics(
+            data['funcionario']?.toString().toLowerCase().trim() ?? '',
+          );
+          final filtroFuncionario = removeDiacritics(
+            funcionarioSelecionado!.toLowerCase().trim(),
+          );
+          if (funcionario != filtroFuncionario) return false;
+        }
 
-              if (formas == null ||
-                  !formas.contains(formaSelecionadaNormalizada)) {
-                return false;
-              }
-            }
+        // Filtro por forma de pagamento
+        if (formaPagamentoSelecionada != null &&
+            formaPagamentoSelecionada!.trim().isNotEmpty) {
+          final pagamentos = data['pagamentos'] as List?;
+          final formas = pagamentos
+              ?.whereType<Map>()
+              .map(
+                (e) => removeDiacritics(
+                  e['forma']?.toString().toLowerCase().trim() ?? '',
+                ),
+              )
+              .toList();
 
-            return true;
-          }).toList();
+          final formaSelecionadaNormalizada = removeDiacritics(
+            formaPagamentoSelecionada!.toLowerCase().trim(),
+          );
 
-          return docsFiltrados;
-        });
+          if (formas == null || !formas.contains(formaSelecionadaNormalizada)) {
+            return false;
+          }
+        }
+
+        return true;
+      }).toList();
+
+      return docsFiltrados;
+    });
   }
 
   Future<void> _selecionarIntervaloDatas() async {
@@ -749,14 +757,15 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
                   MaterialPageRoute(builder: (_) => const ClientesView()),
                 );
               }),
-              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const VendasRealizadasView(),
-                  ),
-                );
-              }),
+              if (tipoUsuario == 'funcionario')
+                _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const VendasRealizadasView(),
+                    ),
+                  );
+                }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(

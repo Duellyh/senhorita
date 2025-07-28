@@ -33,7 +33,6 @@ class _RelatoriosViewState extends State<RelatoriosView> {
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
 
-
   @override
   void initState() {
     super.initState();
@@ -41,10 +40,12 @@ class _RelatoriosViewState extends State<RelatoriosView> {
     buscarTipoUsuario();
   }
 
-
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
-      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .get();
       setState(() {
         tipoUsuario = doc['tipo'] ?? 'funcionario';
         nomeUsuario = doc['nome'] ?? 'Usuário';
@@ -53,8 +54,12 @@ class _RelatoriosViewState extends State<RelatoriosView> {
   }
 
   Future<void> _carregarRelatorio() async {
-    final vendasSnapshot = await FirebaseFirestore.instance.collection('vendas').get();
-    final clientesSnapshot = await FirebaseFirestore.instance.collection('clientes').get();
+    final vendasSnapshot = await FirebaseFirestore.instance
+        .collection('vendas')
+        .get();
+    final clientesSnapshot = await FirebaseFirestore.instance
+        .collection('clientes')
+        .get();
 
     double somaRecebido = 0.0;
 
@@ -79,41 +84,48 @@ class _RelatoriosViewState extends State<RelatoriosView> {
 
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
       appBar: AppBar(
-                backgroundColor: const Color.fromARGB(255, 194, 131, 178),
-                iconTheme: const IconThemeData(color: Colors.white),
-                title: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Senhorita Cintas Modeladores',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
-                      ),
-                    ),
-                    const Center(
-                      child: Text(
-                        'RELATÓRIOS',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
-                      ),
-                    ),
-                  ],
+        backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Stack(
+          alignment: Alignment.center,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Senhorita Cintas Modeladores',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 22,
                 ),
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.logout, color: Colors.white),
-                    onPressed: () async {
-                      await FirebaseAuth.instance.signOut();
-                      Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(builder: (_) => const LoginView()),
-                      );
-                    },
-                  ),
-                ],
+              ),
+            ),
+            const Center(
+              child: Text(
+                'RELATÓRIOS',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 22,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.white),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginView()),
+              );
+            },
+          ),
+        ],
       ),
       drawer: Drawer(
         child: Container(
@@ -129,39 +141,73 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                     const Icon(Icons.store, color: Colors.white, size: 48),
                     const SizedBox(height: 8),
                     Text(
-                  'Olá, ${nomeUsuario.toUpperCase()}',
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-
+                      'Olá, ${nomeUsuario.toUpperCase()}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ],
                 ),
               ),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.dashboard, 'Home', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const HomeView()),
+                  );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const VendasView()),
+                );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                );
               }),
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AdicionarProdutosView(),
+                  ),
+                );
               }),
               _menuItem(Icons.people, 'Clientes', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                );
               }),
-              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
-               }),              
+              if (tipoUsuario == 'funcionario')
+                _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const VendasRealizadasView(),
+                    ),
+                  );
+                }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.show_chart, 'Relatórios', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                  );
                 }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.settings, 'Configurações', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ConfiguracoesView(),
+                    ),
+                  );
                 }),
             ],
           ),
@@ -172,7 +218,10 @@ class _RelatoriosViewState extends State<RelatoriosView> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const Text('📊 Resumo Geral', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text(
+              '📊 Resumo Geral',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             _infoCard(
               icon: Icons.shopping_bag,
@@ -193,27 +242,38 @@ class _RelatoriosViewState extends State<RelatoriosView> {
               color: Colors.deepPurple,
             ),
             const SizedBox(height: 24),
-            const Text('📂 Relatórios Detalhados', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text(
+              '📂 Relatórios Detalhados',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             _actionCard(
               icon: Icons.inventory,
               title: 'Produtos com Estoque Baixo',
               color: Colors.blue,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EstoqueView())),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const EstoqueView()),
+              ),
             ),
             _actionCard(
               icon: Icons.history,
               title: 'Histórico de Vendas',
               color: Colors.orange,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoricoVendasView())),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const HistoricoVendasView()),
+              ),
             ),
             _actionCard(
               icon: Icons.monetization_on,
               title: 'Dashboard Financeiro',
               color: Colors.teal,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FinanceiroView())),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FinanceiroView()),
+              ),
             ),
-
           ],
         ),
       ),
@@ -264,10 +324,10 @@ class _RelatoriosViewState extends State<RelatoriosView> {
   }
 }
 
-  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.white),
-      title: Text(title, style: const TextStyle(color: Colors.white)),
-      onTap: onTap,
-    );
-  }
+Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+  return ListTile(
+    leading: Icon(icon, color: Colors.white),
+    title: Text(title, style: const TextStyle(color: Colors.white)),
+    onTap: onTap,
+  );
+}

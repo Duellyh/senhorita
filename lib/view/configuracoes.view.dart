@@ -35,95 +35,104 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
 
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
-      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .get();
       setState(() {
         tipoUsuario = doc['tipo'] ?? 'funcionario';
         nomeUsuario = doc['nome'] ?? 'Usuário';
       });
     }
   }
+
   void _mostrarDialogAlterarSenha(BuildContext context) {
-  final senhaAtualController = TextEditingController();
-  final novaSenhaController = TextEditingController();
-  final confirmarSenhaController = TextEditingController();
-  final user = FirebaseAuth.instance.currentUser;
+    final senhaAtualController = TextEditingController();
+    final novaSenhaController = TextEditingController();
+    final confirmarSenhaController = TextEditingController();
+    final user = FirebaseAuth.instance.currentUser;
 
-  showDialog(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
-        title: const Text('Alterar Senha'),
-        content: SingleChildScrollView(
-          child: Column(
-            children: [
-              TextField(
-                controller: senhaAtualController,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'Senha atual'),
-              ),
-              TextField(
-                controller: novaSenhaController,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'Nova senha'),
-              ),
-              TextField(
-                controller: confirmarSenhaController,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'Confirmar nova senha'),
-              ),
-            ],
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Alterar Senha'),
+          content: SingleChildScrollView(
+            child: Column(
+              children: [
+                TextField(
+                  controller: senhaAtualController,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Senha atual'),
+                ),
+                TextField(
+                  controller: novaSenhaController,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Nova senha'),
+                ),
+                TextField(
+                  controller: confirmarSenhaController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirmar nova senha',
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            child: const Text('Cancelar'),
-            onPressed: () => Navigator.pop(context),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color.fromARGB(255, 194, 131, 178)),
-            child: const Text('Salvar'),
-            onPressed: () async {
-              final senhaAtual = senhaAtualController.text.trim();
-              final novaSenha = novaSenhaController.text.trim();
-              final confirmarSenha = confirmarSenhaController.text.trim();
+          actions: [
+            TextButton(
+              child: const Text('Cancelar'),
+              onPressed: () => Navigator.pop(context),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+              ),
+              child: const Text('Salvar'),
+              onPressed: () async {
+                final senhaAtual = senhaAtualController.text.trim();
+                final novaSenha = novaSenhaController.text.trim();
+                final confirmarSenha = confirmarSenhaController.text.trim();
 
-              if (novaSenha != confirmarSenha) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('As senhas não coincidem.')),
-                );
-                return;
-              }
+                if (novaSenha != confirmarSenha) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('As senhas não coincidem.')),
+                  );
+                  return;
+                }
 
-              try {
-                final cred = EmailAuthProvider.credential(
-                  email: user!.email!,
-                  password: senhaAtual,
-                );
+                try {
+                  final cred = EmailAuthProvider.credential(
+                    email: user!.email!,
+                    password: senhaAtual,
+                  );
 
-                // Reautenticar usuário
-                await user.reauthenticateWithCredential(cred);
+                  // Reautenticar usuário
+                  await user.reauthenticateWithCredential(cred);
 
-                // Atualizar senha
-                await user.updatePassword(novaSenha);
+                  // Atualizar senha
+                  await user.updatePassword(novaSenha);
 
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Senha alterada com sucesso.')),
-                );
-              } catch (e) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Erro ao alterar senha: $e')),
-                );
-              }
-            },
-          ),
-        ],
-      );
-    },
-  );
-}
-
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Senha alterada com sucesso.'),
+                    ),
+                  );
+                } catch (e) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Erro ao alterar senha: $e')),
+                  );
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -142,12 +151,20 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
               alignment: Alignment.centerLeft,
               child: Text(
                 'Senhorita Cintas Modeladores',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
             const Text(
               'CONFIGURAÇÕES',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 20,
+              ),
             ),
           ],
         ),
@@ -178,39 +195,73 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
                     const Icon(Icons.store, color: Colors.white, size: 48),
                     const SizedBox(height: 8),
                     Text(
-                  'Olá, ${nomeUsuario.toUpperCase()}',
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-
+                      'Olá, ${nomeUsuario.toUpperCase()}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ],
                 ),
               ),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.dashboard, 'Home', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const HomeView()),
+                  );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const VendasView()),
+                );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                );
               }),
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AdicionarProdutosView(),
+                  ),
+                );
               }),
               _menuItem(Icons.people, 'Clientes', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                );
               }),
-              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
-               }),
+              if (tipoUsuario == 'funcionario')
+                _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const VendasRealizadasView(),
+                    ),
+                  );
+                }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.show_chart, 'Relatórios', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                  );
                 }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.settings, 'Configurações', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ConfiguracoesView(),
+                    ),
+                  );
                 }),
             ],
           ),
@@ -233,7 +284,9 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const GerenciarUsuariosView()),
+                MaterialPageRoute(
+                  builder: (_) => const GerenciarUsuariosView(),
+                ),
               );
             },
           ),
@@ -246,7 +299,9 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
                 context: context,
                 applicationName: 'SystemVende',
                 applicationVersion: '1.0.0',
-                children: const [Text('Aplicativo de vendas desenvolvido com Flutter.')],
+                children: const [
+                  Text('Aplicativo de vendas desenvolvido com Flutter.'),
+                ],
               );
             },
           ),

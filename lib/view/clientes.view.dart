@@ -36,7 +36,10 @@ class _ClientesViewState extends State<ClientesView> {
 
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
-      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .get();
       setState(() {
         tipoUsuario = doc['tipo'] ?? 'funcionario';
         nomeUsuario = doc['nome'] ?? 'Usuário';
@@ -88,7 +91,9 @@ class _ClientesViewState extends State<ClientesView> {
               };
 
               if (cliente == null) {
-                await FirebaseFirestore.instance.collection('clientes').add(data);
+                await FirebaseFirestore.instance
+                    .collection('clientes')
+                    .add(data);
               } else {
                 await cliente.reference.update(data);
               }
@@ -112,43 +117,50 @@ class _ClientesViewState extends State<ClientesView> {
 
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
       appBar: AppBar(
-                backgroundColor: const Color.fromARGB(255, 194, 131, 178),
-                iconTheme: const IconThemeData(color: Colors.white),
-                title: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Senhorita Cintas Modeladores',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
-                      ),
-                    ),
-                    const Center(
-                      child: Text(
-                        'CLIENTES',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
-                      ),
-                    ),
-                  ],
+        backgroundColor: const Color.fromARGB(255, 194, 131, 178),
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Stack(
+          alignment: Alignment.center,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Senhorita Cintas Modeladores',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 22,
                 ),
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.logout, color: Colors.white),
-                    onPressed: () async {
-                      await FirebaseAuth.instance.signOut();
-                      Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(builder: (_) => const LoginView()),
-                      );
-                    },
-                  ),
-                ],
+              ),
+            ),
+            const Center(
+              child: Text(
+                'CLIENTES',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 22,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.white),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginView()),
+              );
+            },
+          ),
+        ],
       ),
-            drawer: Drawer(
+      drawer: Drawer(
         child: Container(
           color: primaryColor,
           child: ListView(
@@ -161,49 +173,89 @@ class _ClientesViewState extends State<ClientesView> {
                   children: [
                     const Icon(Icons.store, color: Colors.white, size: 48),
                     const SizedBox(height: 8),
-                                       Text(
-                  'Olá, ${nomeUsuario.toUpperCase()}',
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
+                    Text(
+                      'Olá, ${nomeUsuario.toUpperCase()}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ],
                 ),
               ),
               if (tipoUsuario == 'admin')
-              _menuItem(Icons.dashboard, 'Home', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeView()));
-                    }),
+                _menuItem(Icons.dashboard, 'Home', () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const HomeView()),
+                  );
+                }),
               _menuItem(Icons.attach_money, 'Vender', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const VendasView()),
+                );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                );
               }),
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AdicionarProdutosView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AdicionarProdutosView(),
+                  ),
+                );
               }),
               _menuItem(Icons.people, 'Clientes', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ClientesView()));
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                );
               }),
-               _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const VendasRealizadasView()));
-             }),
+              if (tipoUsuario == 'funcionario')
+                _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const VendasRealizadasView(),
+                    ),
+                  );
+                }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.show_chart, 'Relatórios', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const RelatoriosView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                  );
                 }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.settings, 'Configurações', () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ConfiguracoesView()));
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ConfiguracoesView(),
+                    ),
+                  );
                 }),
             ],
           ),
-          ),
         ),
+      ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('clientes').orderBy('nome').snapshots(),
+        stream: FirebaseFirestore.instance
+            .collection('clientes')
+            .orderBy('nome')
+            .snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text('Nenhum cliente cadastrado.'));
+          if (snapshot.connectionState == ConnectionState.waiting)
+            return const Center(child: CircularProgressIndicator());
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty)
+            return const Center(child: Text('Nenhum cliente cadastrado.'));
 
           final clientes = snapshot.data!.docs;
 
@@ -218,7 +270,10 @@ class _ClientesViewState extends State<ClientesView> {
                 elevation: 2,
                 margin: const EdgeInsets.symmetric(vertical: 8),
                 child: ListTile(
-                  leading: const Icon(Icons.person, color: Color.fromARGB(255, 194, 131, 178)),
+                  leading: const Icon(
+                    Icons.person,
+                    color: Color.fromARGB(255, 194, 131, 178),
+                  ),
                   title: Text(data['nome'] ?? ''),
                   subtitle: Text(data['telefone'] ?? ''),
                   trailing: Row(
@@ -226,7 +281,8 @@ class _ClientesViewState extends State<ClientesView> {
                     children: [
                       IconButton(
                         icon: const Icon(Icons.edit, color: Colors.blue),
-                        onPressed: () => _adicionarOuEditarCliente(cliente: cliente),
+                        onPressed: () =>
+                            _adicionarOuEditarCliente(cliente: cliente),
                       ),
                       IconButton(
                         icon: const Icon(Icons.delete, color: Colors.red),
@@ -250,10 +306,11 @@ class _ClientesViewState extends State<ClientesView> {
     );
   }
 }
-  Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.white),
-      title: Text(title, style: const TextStyle(color: Colors.white)),
-      onTap: onTap,
-    );
-  }
+
+Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
+  return ListTile(
+    leading: Icon(icon, color: Colors.white),
+    title: Text(title, style: const TextStyle(color: Colors.white)),
+    onTap: onTap,
+  );
+}

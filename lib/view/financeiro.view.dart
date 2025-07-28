@@ -490,14 +490,15 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                   MaterialPageRoute(builder: (_) => const ClientesView()),
                 );
               }),
-              _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const VendasRealizadasView(),
-                  ),
-                );
-              }),
+              if (tipoUsuario == 'funcionario')
+                _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const VendasRealizadasView(),
+                    ),
+                  );
+                }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(
