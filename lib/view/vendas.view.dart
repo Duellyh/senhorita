@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
@@ -325,93 +326,127 @@ class _VendasViewState extends State<VendasView> {
 
     pdf.addPage(
       pw.Page(
+        pageFormat: PdfPageFormat(58 * PdfPageFormat.mm, double.infinity),
+        margin: pw.EdgeInsets.zero,
         build: (context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Text(
-                "SENHORITA CINTAS",
-                style: pw.TextStyle(
-                  fontSize: 18,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              pw.SizedBox(height: 4),
-              pw.Text(
-                "COMPROVANTE PAGAMENTO",
-                style: pw.TextStyle(
-                  fontSize: 14,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              pw.SizedBox(height: 4),
-              pw.Text("Funcionario: $funcionarioSelecionado"),
-              pw.Text(
-                "Cliente: ${clienteNomeController.text.isNotEmpty ? clienteNomeController.text : 'CONSUMIDOR'}",
-              ),
-              pw.Text("Loja: $nomeLoja"),
-              pw.Text(
-                "Data: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}",
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                "Itens:",
-                style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-              ),
-              pw.Divider(),
-
-              ...itens.map((item) {
-                final nome = item['produtoNome'] ?? '';
-                final tamanho = item['tamanho'] ?? '';
-                final qtd = item['quantidade'] ?? 0;
-                final preco = item['precoFinal'] ?? 0.0;
-                final precoPromocional = item['precoPromocional'] ?? 0.0;
-                final desconto = item['desconto'] ?? 0.0;
-
-                final precoUnitario = preco;
-                final precoTotal = precoUnitario * qtd;
-
-                final temPromocao =
-                    precoPromocional > 0 && precoPromocional < preco;
-                final temDesconto = desconto > 0;
-
-                final precoUnitarioTexto = temPromocao
-                    ? "R\$ ${precoPromocional.toStringAsFixed(2)} (Promoção)"
-                    : temDesconto
-                    ? "R\$ ${preco.toStringAsFixed(2)} (-R\$ ${desconto.toStringAsFixed(2)})"
-                    : "R\$ ${preco.toStringAsFixed(2)}";
-
-                return pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    pw.Text("$nome ${tamanho.isNotEmpty ? '($tamanho)' : ''}"),
-                    pw.Text(
-                      "Quantidade: $qtd x $precoUnitarioTexto = R\$ ${precoTotal.toStringAsFixed(2)}",
+          return pw.Padding(
+            padding: const pw.EdgeInsets.all(4),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Center(
+                  child: pw.Text(
+                    "SENHORITA CINTAS",
+                    style: pw.TextStyle(
+                      fontSize: 12,
+                      fontWeight: pw.FontWeight.bold,
                     ),
-                    pw.SizedBox(height: 4),
-                  ],
-                );
-              }),
-
-              pw.Divider(),
-              if (valorFrete > 0)
-                pw.Text("Frete: R\$ ${valorFrete.toStringAsFixed(2)}"),
-              if (valorFrete > 0)
-                pw.Text(
-                  "Total da Venda com o Frete: R\$ ${(totalVenda + valorFrete).toStringAsFixed(2)}",
+                  ),
                 ),
-              pw.Text("Total da Venda: R\$ ${totalVenda.toStringAsFixed(2)}"),
-              pw.Text("Total Pago: R\$ ${totalPago.toStringAsFixed(2)}"),
-              pw.Text("Troco: R\$ ${troco.toStringAsFixed(2)}"),
-              pw.Text(
-                "Forma de Pagamento: ${formasPagamento.isNotEmpty ? formasPagamento : 'Não informado'}",
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                "Obrigada pela preferência!",
-                style: pw.TextStyle(fontSize: 12),
-              ),
-            ],
+                pw.Center(
+                  child: pw.Text(
+                    "COMPROVANTE PAGAMENTO",
+                    style: pw.TextStyle(
+                      fontSize: 10,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  "Funcionário: ${funcionarioSelecionado ?? '-'}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Cliente: ${clienteNomeController.text.isNotEmpty ? clienteNomeController.text : 'CONSUMIDOR'}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text("Loja: $nomeLoja", style: pw.TextStyle(fontSize: 8)),
+                pw.Text(
+                  "Data: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.SizedBox(height: 6),
+                pw.Text(
+                  "Itens:",
+                  style: pw.TextStyle(
+                    fontWeight: pw.FontWeight.bold,
+                    fontSize: 9,
+                  ),
+                ),
+                pw.Divider(thickness: 1),
+                ...itens.map((item) {
+                  final nome = item['produtoNome'] ?? '';
+                  final tamanho = item['tamanho'] ?? '';
+                  final qtd = item['quantidade'] ?? 0;
+                  final preco = item['precoFinal'] ?? 0.0;
+                  final precoPromocional = item['precoPromocional'] ?? 0.0;
+                  final desconto = item['desconto'] ?? 0.0;
+
+                  final precoUnitario = preco;
+                  final precoTotal = precoUnitario * qtd;
+
+                  final temPromocao =
+                      precoPromocional > 0 && precoPromocional < preco;
+                  final temDesconto = desconto > 0;
+
+                  final precoUnitarioTexto = temPromocao
+                      ? "R\$ ${precoPromocional.toStringAsFixed(2)} (Promo)"
+                      : temDesconto
+                      ? "R\$ ${preco.toStringAsFixed(2)} (-R\$ ${desconto.toStringAsFixed(2)})"
+                      : "R\$ ${preco.toStringAsFixed(2)}";
+
+                  return pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        "$nome ${tamanho.isNotEmpty ? '($tamanho)' : ''}",
+                        style: pw.TextStyle(fontSize: 8),
+                      ),
+                      pw.Text(
+                        "Qtd: $qtd x $precoUnitarioTexto = R\$ ${precoTotal.toStringAsFixed(2)}",
+                        style: pw.TextStyle(fontSize: 8),
+                      ),
+                      pw.SizedBox(height: 2),
+                    ],
+                  );
+                }),
+                pw.Divider(thickness: 0.5),
+                if (valorFrete > 0)
+                  pw.Text(
+                    "Frete: R\$ ${valorFrete.toStringAsFixed(2)}",
+                    style: pw.TextStyle(fontSize: 8),
+                  ),
+                if (valorFrete > 0)
+                  pw.Text(
+                    "Total c/ Frete: R\$ ${(totalVenda + valorFrete).toStringAsFixed(2)}",
+                    style: pw.TextStyle(fontSize: 8),
+                  ),
+                pw.Text(
+                  "Total Venda: R\$ ${totalVenda.toStringAsFixed(2)}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Total Pago: R\$ ${totalPago.toStringAsFixed(2)}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Troco: R\$ ${troco.toStringAsFixed(2)}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Forma de Pagamento: ${formasPagamento.isNotEmpty ? formasPagamento : 'Não informado'}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.SizedBox(height: 6),
+                pw.Center(
+                  child: pw.Text(
+                    "Obrigada pela preferência!",
+                    style: pw.TextStyle(fontSize: 9),
+                  ),
+                ),
+              ],
+            ),
           );
         },
       ),

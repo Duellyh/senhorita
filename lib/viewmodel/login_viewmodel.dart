@@ -1,12 +1,10 @@
-
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:senhorita/service/auth_service.dart';
 
 class LoginViewModel {
   final AuthService _authService = AuthService();
 
-  get usuarioLogado => null;
+  User? get usuarioLogado => FirebaseAuth.instance.currentUser;
 
   Future<String?> login(String email, String senha) async {
     if (email.isEmpty || senha.isEmpty) return 'Preencha todos os campos';
@@ -14,8 +12,10 @@ class LoginViewModel {
     try {
       await _authService.login(email, senha);
       return null;
-    } catch (e) {
+    } on FirebaseAuthException catch (e) {
       return _mapearErroLogin(e);
+    } catch (e) {
+      return 'Erro inesperado: ${e.toString()}';
     }
   }
 
@@ -26,13 +26,14 @@ class LoginViewModel {
     try {
       await _authService.enviarEmailRedefinicao(email);
       return null;
-    } catch (e) {
+    } on FirebaseAuthException catch (e) {
       return _mapearErroRedefinicao(e);
+    } catch (e) {
+      return 'Erro ao enviar e-mail: ${e.toString()}';
     }
   }
 
-String _mapearErroLogin(dynamic e) {
-  if (e is FirebaseAuthException) {
+  String _mapearErroLogin(FirebaseAuthException e) {
     switch (e.code) {
       case 'user-not-found':
         return 'Usuário não encontrado';
@@ -51,20 +52,10 @@ String _mapearErroLogin(dynamic e) {
     }
   }
 
-  // Erros de rede genéricos
-  if (e.toString().toLowerCase().contains('network') ||
-      e.toString().toLowerCase().contains('timeout')) {
-    return 'Erro de conexão com a internet. Verifique sua rede.';
-  }
-
-  return 'Erro desconhecido ao fazer login';
-}
-
-
-  String _mapearErroRedefinicao(dynamic e) {
-    if (e is FirebaseAuthException && e.code == 'user-not-found') {
+  String _mapearErroRedefinicao(FirebaseAuthException e) {
+    if (e.code == 'user-not-found') {
       return 'Usuário não encontrado com esse e-mail';
     }
-    return 'Erro ao enviar e-mail';
+    return 'Erro ao enviar e-mail: ${e.message}';
   }
 }

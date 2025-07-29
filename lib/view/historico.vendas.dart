@@ -438,31 +438,48 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
 
     pdf.addPage(
       pw.Page(
+        pageFormat: const PdfPageFormat(165, double.infinity), // 58mm largura
+        margin: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 10),
         build: (context) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
-            pw.Text(
-              "SENHORITA CINTAS",
-              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
+            pw.Center(
+              child: pw.Text(
+                "SENHORITA CINTAS",
+                style: pw.TextStyle(
+                  fontSize: 12,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
             ),
             pw.SizedBox(height: 4),
-            pw.Text(
-              "COMPROVANTE DE VENDA",
-              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+            pw.Center(
+              child: pw.Text(
+                "COMPROVANTE DE VENDA",
+                style: pw.TextStyle(
+                  fontSize: 10,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
             ),
-            pw.SizedBox(height: 4),
-            pw.Text("Atendente: ${venda['funcionario']}"),
-            pw.Text("Cliente: $cliente"),
-            if (telefone.isNotEmpty) pw.Text("Telefone: $telefone"),
+            pw.SizedBox(height: 6),
+            pw.Text(
+              "Atendente: ${venda['funcionario']}",
+              style: pw.TextStyle(fontSize: 8),
+            ),
+            pw.Text("Cliente: $cliente", style: pw.TextStyle(fontSize: 8)),
+            if (telefone.isNotEmpty)
+              pw.Text("Telefone: $telefone", style: pw.TextStyle(fontSize: 8)),
             pw.Text(
               "Data: ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}",
+              style: pw.TextStyle(fontSize: 8),
             ),
-            pw.SizedBox(height: 10),
+            pw.SizedBox(height: 6),
             pw.Text(
               "Itens:",
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
             ),
-            pw.Divider(),
+            pw.Divider(height: 1),
             ...itens.map((item) {
               final quantidade = item['quantidade'] ?? 1;
               final precoFinal = item['precoFinal'] ?? 0.0;
@@ -477,45 +494,61 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
                     pw.Text(
                       ">> PRODUTO EM PROMOÇÃO <<",
                       style: pw.TextStyle(
+                        fontSize: 7,
                         color: PdfColors.red,
                         fontWeight: pw.FontWeight.bold,
                       ),
                     ),
                   pw.Text(
                     "${item['produtoNome']} ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}",
+                    style: pw.TextStyle(fontSize: 8),
                   ),
                   pw.Text(
-                    "Quantidade: $quantidade - Unitário: R\$ ${precoFinal.toStringAsFixed(2)}"
+                    "Qtd: $quantidade - Unit: R\$ ${precoFinal.toStringAsFixed(2)}"
                     "${desconto > 0 ? ' | Desc: R\$ ${desconto.toStringAsFixed(2)}' : ''}"
                     "${precoPromocional > 0 ? ' | Promo: R\$ ${precoPromocional.toStringAsFixed(2)}' : ''}",
+                    style: pw.TextStyle(fontSize: 8),
                   ),
-                  pw.Text("Subtotal: R\$ ${totalItem.toStringAsFixed(2)}"),
-                  pw.Divider(),
+                  pw.Text(
+                    "Subtotal: R\$ ${totalItem.toStringAsFixed(2)}",
+                    style: pw.TextStyle(fontSize: 8),
+                  ),
+                  pw.Divider(height: 1),
                 ],
               );
             }),
-            pw.SizedBox(height: 10),
-            pw.Text("Frete: R\$ ${frete.toStringAsFixed(2)}"),
+            pw.SizedBox(height: 6),
             pw.Text(
-              "Total da Venda: R\$ ${venda['totalVenda']?.toStringAsFixed(2) ?? '0.00'}",
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              "Frete: R\$ ${frete.toStringAsFixed(2)}",
+              style: pw.TextStyle(fontSize: 8),
+            ),
+            pw.Text(
+              "Total da Venda: R\$ ${total.toStringAsFixed(2)}",
+              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
             ),
             pw.Text(
               "Total com Frete: R\$ ${(total + frete).toStringAsFixed(2)}",
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
             ),
             pw.Text(
               "Total Pago: R\$ ${venda['totalPago']?.toStringAsFixed(2) ?? '0.00'}",
+              style: pw.TextStyle(fontSize: 8),
             ),
             pw.Text(
               "Troco: R\$ ${venda['troco']?.toStringAsFixed(2) ?? '0.00'}",
+              style: pw.TextStyle(fontSize: 8),
             ),
-            pw.SizedBox(height: 10),
-            pw.Text("Forma de Pagamento: $formasPagamento"),
-            pw.SizedBox(height: 10),
+            pw.SizedBox(height: 6),
             pw.Text(
-              "Obrigada pela preferência!",
-              style: pw.TextStyle(fontSize: 12),
+              "Forma de Pagamento: $formasPagamento",
+              style: pw.TextStyle(fontSize: 8),
+            ),
+            pw.SizedBox(height: 8),
+            pw.Center(
+              child: pw.Text(
+                "Obrigada pela preferência!",
+                style: pw.TextStyle(fontSize: 9),
+              ),
             ),
           ],
         ),
