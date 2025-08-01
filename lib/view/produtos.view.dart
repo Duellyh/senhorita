@@ -138,7 +138,7 @@ class _ProdutosViewState extends State<ProdutosView> {
                 }
 
                 Navigator.pop(ctx);
-                _imprimirEtiqueta(data, produto.id, tamanhoSelecionado);
+                _imprimirEtiquetaDupla(data, produto.id, tamanhoSelecionado);
               },
               child: const Text('Imprimir'),
             ),
@@ -148,7 +148,7 @@ class _ProdutosViewState extends State<ProdutosView> {
     );
   }
 
-  void _imprimirEtiqueta(
+  void _imprimirEtiquetaDupla(
     Map<String, dynamic> data,
     String id,
     String? tamanhoSelecionado,
@@ -158,40 +158,62 @@ class _ProdutosViewState extends State<ProdutosView> {
     final barcode = Barcode.code128();
     final barcodeSvg = barcode.toSvg(
       data['codigoBarras'] ?? '',
-      width: 200,
-      height: 60,
+      width: 60,
+      height: 16,
     );
+
+    const double etiquetaLargura = 38 * PdfPageFormat.mm;
+    const double etiquetaAltura = 25 * PdfPageFormat.mm;
+
+    pw.Widget _etiqueta() {
+      return pw.Container(
+        width: etiquetaLargura,
+        height: etiquetaAltura,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: pw.Column(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+          crossAxisAlignment: pw.CrossAxisAlignment.center,
+          children: [
+            pw.Text(
+              (data['nome'] ?? 'Sem nome').toString().length > 20
+                  ? '${data['nome'].toString().substring(0, 20)}…'
+                  : data['nome'] ?? 'Sem nome',
+              style: pw.TextStyle(
+                fontSize: 8.5,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              maxLines: 1,
+              textAlign: pw.TextAlign.center,
+            ),
+            if (tamanhoSelecionado != null)
+              pw.Text(
+                'Tam: $tamanhoSelecionado',
+                style: const pw.TextStyle(fontSize: 8),
+                textAlign: pw.TextAlign.center,
+              ),
+            pw.Text(
+              'R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
+              style: const pw.TextStyle(fontSize: 8),
+              textAlign: pw.TextAlign.center,
+            ),
+            pw.SvgImage(svg: barcodeSvg),
+          ],
+        ),
+      );
+    }
 
     doc.addPage(
       pw.Page(
-        pageFormat: const PdfPageFormat(
-          58 * PdfPageFormat.mm,
-          40 * PdfPageFormat.mm,
-        ), // 58mm etiqueta
-        margin: const pw.EdgeInsets.all(4),
-        build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Text(
-                data['nome'] ?? 'Sem nome',
-                style: pw.TextStyle(
-                  fontSize: 10,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              if (tamanhoSelecionado != null)
-                pw.Text(
-                  'Tamanho: $tamanhoSelecionado',
-                  style: const pw.TextStyle(fontSize: 9),
-                ),
-              pw.Text(
-                'Preço: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
-                style: const pw.TextStyle(fontSize: 9),
-              ),
-              pw.SizedBox(height: 4),
-              pw.SvgImage(svg: barcodeSvg),
-            ],
+        pageFormat: PdfPageFormat(
+          80 * PdfPageFormat.mm, // largura total do rolo
+          etiquetaAltura,
+        ),
+        margin: const pw.EdgeInsets.symmetric(horizontal: 5 * PdfPageFormat.mm),
+        build: (context) {
+          return pw.Row(
+            mainAxisAlignment:
+                pw.MainAxisAlignment.spaceAround, // <-- espaço maior
+            children: [_etiqueta(), _etiqueta()],
           );
         },
       ),
