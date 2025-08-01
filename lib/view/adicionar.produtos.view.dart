@@ -69,6 +69,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'CINZA': Colors.grey,
     'BEGE': const Color(0xFFF5F5DC),
     'ESTAMPA': const Color(0xFFD8BFD8),
+    'CORES VARIADAS': const Color.fromARGB(255, 102, 201, 132),
   };
 
   final categorias = [
@@ -82,6 +83,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'MODA PRAIA',
     'ACESSÓRIOS',
     'JALECOS',
+    'SUTIÃ MODELADORES',
     'OUTROS',
   ];
 
@@ -93,9 +95,19 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
   ];
 
   String? categoriaSelecionada;
-  final tamanhosDisponiveis = ['P', 'M', 'G', 'GG', 'XG', '50', '52', '54'];
+  final tamanhosDisponiveis = [
+    'PP',
+    'P',
+    'M',
+    'G',
+    'GG',
+    'XG',
+    '50',
+    '52',
+    '54',
+  ];
   Map<String, int> tamanhosSelecionados = {
-    for (var t in ['P', 'M', 'G', 'GG', 'XG', '50', '52', '54']) t: 0,
+    for (var t in ['PP', 'P', 'M', 'G', 'GG', 'XG', '50', '52', '54']) t: 0,
   };
 
   @override
@@ -138,7 +150,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
 
   double _converterParaDouble(String valor) {
     final somenteNumeros = valor.replaceAll(RegExp(r'[^0-9]'), '');
-    return double.tryParse(somenteNumeros)! / 100;
+    final convertido = double.tryParse(somenteNumeros);
+    if (convertido == null) return 0.0;
+    return convertido / 100;
   }
 
   Future<String?> uploadImagem(String id) async {
@@ -482,6 +496,12 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                         onChanged: (value) {
                           setState(() => corSelecionada = value);
                         },
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Selecione uma cor';
+                          }
+                          return null;
+                        },
                       ),
                       DropdownButtonFormField<String>(
                         value: lojaSelecionada,
@@ -495,6 +515,12 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                             )
                             .toList(),
                         onChanged: (v) => setState(() => lojaSelecionada = v),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Selecione uma loja';
+                          }
+                          return null;
+                        },
                       ),
                       if (tipoUsuario != 'funcionario') ...[
                         TextFormField(

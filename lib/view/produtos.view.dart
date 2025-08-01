@@ -158,8 +158,8 @@ class _ProdutosViewState extends State<ProdutosView> {
     final barcode = Barcode.code128();
     final barcodeSvg = barcode.toSvg(
       data['codigoBarras'] ?? '',
-      width: 60,
-      height: 16,
+      width: 100, // Aumenta a largura do código de barras
+      height: 30, // Aumenta a altura do código de barras
     );
 
     const double etiquetaLargura = 38 * PdfPageFormat.mm;
@@ -211,9 +211,12 @@ class _ProdutosViewState extends State<ProdutosView> {
         margin: const pw.EdgeInsets.symmetric(horizontal: 5 * PdfPageFormat.mm),
         build: (context) {
           return pw.Row(
-            mainAxisAlignment:
-                pw.MainAxisAlignment.spaceAround, // <-- espaço maior
-            children: [_etiqueta(), _etiqueta()],
+            mainAxisAlignment: pw.MainAxisAlignment.center,
+            children: [
+              _etiqueta(),
+              pw.SizedBox(width: 14), // ajuste aqui o espaço do meio
+              _etiqueta(),
+            ],
           );
         },
       ),

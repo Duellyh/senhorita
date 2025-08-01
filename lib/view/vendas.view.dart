@@ -62,6 +62,7 @@ class _VendasViewState extends State<VendasView> {
   String? funcionarioSelecionado;
   List<String> funcionarios = [];
   double custoReal = 0.0; // Variável para armazenar o custo real do produto
+  bool mostrarCampoFuncionario = false;
 
   @override
   void initState() {
@@ -72,6 +73,7 @@ class _VendasViewState extends State<VendasView> {
         funcionarios = lista;
       });
     });
+    mostrarCampoFuncionario = false;
   }
 
   Future<void> buscarTipoUsuario() async {
@@ -1194,6 +1196,9 @@ class _VendasViewState extends State<VendasView> {
                         'forma': formaSelecionada,
                         'valor': valor,
                       });
+                      setState(() {
+                        mostrarCampoFuncionario = true;
+                      });
                       valorPagamentoController.clear();
                       formaSelecionada = null;
                     });
@@ -1363,29 +1368,39 @@ class _VendasViewState extends State<VendasView> {
                 },
               ),
               const SizedBox(height: 20),
-              DropdownButtonFormField<String>(
-                value: funcionarioSelecionado,
-                hint: Text('Selecionar Funcionário'),
-                items: funcionarios.map((String nome) {
-                  return DropdownMenuItem<String>(
-                    value: nome,
-                    child: Text(nome),
-                  );
-                }).toList(),
-                onChanged: (String? novoValor) {
-                  setState(() {
-                    funcionarioSelecionado = novoValor;
-                  });
-                },
-                decoration: InputDecoration(
-                  labelText: 'Funcionário',
-                  border: OutlineInputBorder(),
+              if (mostrarCampoFuncionario)
+                DropdownButtonFormField<String>(
+                  value: funcionarioSelecionado,
+                  hint: const Text('Selecionar Funcionário'),
+                  items: funcionarios.map((String nome) {
+                    return DropdownMenuItem<String>(
+                      value: nome,
+                      child: Text(nome),
+                    );
+                  }).toList(),
+                  onChanged: (String? novoValor) {
+                    setState(() {
+                      funcionarioSelecionado = novoValor;
+                    });
+                  },
+                  decoration: const InputDecoration(
+                    labelText: 'Funcionário',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) =>
+                      value == null ? 'Selecione um funcionário' : null,
                 ),
-              ),
 
               const SizedBox(height: 20),
               ElevatedButton.icon(
-                onPressed: realizarVenda,
+                onPressed: () {
+                  // Aguarda um frame para garantir que o campo seja renderizado antes da validação
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (_formKey.currentState!.validate()) {
+                      realizarVenda();
+                    }
+                  });
+                },
                 icon: const Icon(Icons.shopping_cart_checkout),
                 label: const Text('Finalizar Venda'),
                 style: ElevatedButton.styleFrom(
