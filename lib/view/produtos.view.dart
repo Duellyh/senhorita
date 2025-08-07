@@ -1,7 +1,4 @@
 // ignore_for_file: use_build_context_synchronously
-
-import 'dart:typed_data';
-import 'package:barcode_image/barcode_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -17,7 +14,6 @@ import 'package:senhorita/view/vendas.view.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:image/image.dart' as img;
 
 class ProdutosView extends StatefulWidget {
   const ProdutosView({super.key});
@@ -242,22 +238,19 @@ class _ProdutosViewState extends State<ProdutosView> {
               (data['nome'] ?? 'Sem nome').toString().length > 20
                   ? '${data['nome'].toString().substring(0, 20)}…'
                   : data['nome'] ?? 'Sem nome',
-              style: pw.TextStyle(
-                fontSize: 8.5,
-                fontWeight: pw.FontWeight.bold,
-              ),
+              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
               maxLines: 1,
               textAlign: pw.TextAlign.center,
             ),
             if (tamanhoSelecionado != null)
               pw.Text(
                 'Tam: $tamanhoSelecionado',
-                style: const pw.TextStyle(fontSize: 8),
+                style: const pw.TextStyle(fontSize: 6),
                 textAlign: pw.TextAlign.center,
               ),
             pw.Text(
               'R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
-              style: const pw.TextStyle(fontSize: 8),
+              style: const pw.TextStyle(fontSize: 6),
               textAlign: pw.TextAlign.center,
             ),
             pw.BarcodeWidget(
@@ -266,6 +259,11 @@ class _ProdutosViewState extends State<ProdutosView> {
               width: 100,
               height: 30,
               drawText: false,
+            ),
+            pw.Text(
+              codigo,
+              style: const pw.TextStyle(fontSize: 6),
+              textAlign: pw.TextAlign.center,
             ),
           ],
         ),
@@ -284,7 +282,7 @@ class _ProdutosViewState extends State<ProdutosView> {
             mainAxisAlignment: pw.MainAxisAlignment.center,
             children: [
               _etiqueta(),
-              pw.SizedBox(width: 12), // espaço entre etiquetas
+              pw.SizedBox(width: 10), // espaço entre etiquetas
               _etiqueta(),
             ],
           );
@@ -297,36 +295,6 @@ class _ProdutosViewState extends State<ProdutosView> {
       printer: impressoraSelecionada,
       onLayout: (_) => doc.save(),
     );
-  }
-
-  Future<Uint8List> gerarImagemBarcodeParaEtiqueta30x12(String codigo) async {
-    // Tamanho físico: 30x12mm em 203 DPI ≈ 240x96 pixels
-    const largura = 240;
-    const altura = 96;
-
-    // Criar imagem branca
-    final image = img.Image(width: largura, height: altura);
-    img.fill(image, color: img.ColorRgb8(255, 255, 255));
-
-    // Margens mínimas para manter legibilidade
-    const margemH = 8; // horizontal
-    const margemV = 8; // vertical
-
-    final larguraCodigo = largura - 2 * margemH;
-    final alturaCodigo = altura - 2 * margemV;
-
-    // Gerar código de barras com área útil ajustada
-    drawBarcode(
-      image,
-      Barcode.code128(),
-      codigo,
-      x: margemH,
-      y: margemV,
-      width: larguraCodigo,
-      height: alturaCodigo,
-    );
-
-    return Uint8List.fromList(img.encodePng(image));
   }
 
   Future<void> corrigirCampoAtivo() async {
@@ -602,7 +570,7 @@ class _ProdutosViewState extends State<ProdutosView> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  'ID: ${produto.id}',
+                                  'ID: ${data['codigoBarras'] ?? produto.id}',
                                   style: const TextStyle(fontSize: 12),
                                 ),
                                 Text(
