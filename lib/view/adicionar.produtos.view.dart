@@ -13,6 +13,7 @@ import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
+import 'dart:math';
 
 class AdicionarProdutosView extends StatefulWidget {
   final DocumentSnapshot? produto;
@@ -67,6 +68,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'ROSA': Colors.pink,
     'ROXO': Colors.purple,
     'CINZA': Colors.grey,
+    'LARANJA': Colors.orange,
+    'MARROM': Colors.brown,
+    'CASTANHA': const Color.fromARGB(255, 83, 46, 16),
     'BEGE': const Color(0xFFF5F5DC),
     'ESTAMPA': const Color(0xFFD8BFD8),
     'CORES VARIADAS': const Color.fromARGB(255, 102, 201, 132),
@@ -96,6 +100,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
 
   String? categoriaSelecionada;
   final tamanhosDisponiveis = [
+    'EPP',
     'PP',
     'P',
     'M',
@@ -107,7 +112,8 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     '54',
   ];
   Map<String, int> tamanhosSelecionados = {
-    for (var t in ['PP', 'P', 'M', 'G', 'GG', 'XG', '50', '52', '54']) t: 0,
+    for (var t in ['EPP', 'PP', 'P', 'M', 'G', 'GG', 'XG', '50', '52', '54'])
+      t: 0,
   };
 
   @override
@@ -169,6 +175,42 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     }
   }
 
+  /// Gera um código aleatório com prefixo, exemplo: 'PROD9K2X3A'
+  String gerarCodigoComPrefixo(String prefixo, {int tamanho = 6}) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rand = Random.secure();
+
+    final sufixo = List.generate(
+      tamanho,
+      (_) => chars[rand.nextInt(chars.length)],
+    ).join();
+
+    return '$prefixo$sufixo'; // Ou só return sufixo;
+  }
+
+  /// Verifica se o código já existe no Firestore
+  Future<bool> codigoJaExiste(String codigo) async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('produtos')
+        .where('codigoBarras', isEqualTo: codigo)
+        .get();
+
+    return snapshot.docs.isNotEmpty;
+  }
+
+  /// Gera um código único que ainda não existe no Firebase
+  Future<String> gerarCodigoUnico({String prefixo = 'PROD'}) async {
+    String codigo;
+    bool existe;
+
+    do {
+      codigo = gerarCodigoComPrefixo(prefixo);
+      existe = await codigoJaExiste(codigo);
+    } while (existe);
+
+    return codigo;
+  }
+
   Future<void> salvarProduto() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -178,11 +220,24 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
 
-    final docRef = widget.produto != null
-        ? FirebaseFirestore.instance
+    final bool novoProduto = widget.produto == null;
+
+    final docRef = novoProduto
+        ? FirebaseFirestore.instance.collection('produtos').doc()
+        : FirebaseFirestore.instance
               .collection('produtos')
-              .doc(widget.produto!.id)
-        : FirebaseFirestore.instance.collection('produtos').doc();
+              .doc(widget.produto!.id);
+
+    String codigoCurto;
+
+    if (novoProduto) {
+      codigoCurto = await gerarCodigoUnico(prefixo: 'PROD');
+    } else {
+      final dados = widget.produto!.data() as Map<String, dynamic>;
+      codigoCurto =
+          (dados['codigoBarras'] as String?) ??
+          await gerarCodigoUnico(prefixo: 'PROD');
+    }
 
     try {
       final fotoUrl = await uploadImagem(docRef.id);
@@ -217,11 +272,12 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           ),
           'quantidade': quantidadeTotal,
         },
-        'codigoBarras': docRef.id,
+        'codigoBarras': codigoCurto,
+
         'busca': [
           nome.toLowerCase(),
           categoria.toLowerCase(),
-          docRef.id.toLowerCase(),
+          codigoCurto.toLowerCase(),
         ],
       };
 
