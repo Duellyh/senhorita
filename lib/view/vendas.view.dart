@@ -454,7 +454,19 @@ class _VendasViewState extends State<VendasView> {
       ),
     );
 
-    await Printing.layoutPdf(onLayout: (format) => pdf.save());
+    // Buscar impressora pelo nome
+    final impressoras = await Printing.listPrinters();
+    final impressoraNota = impressoras.firstWhere(
+      (p) => p.name.toUpperCase() == 'IMPRESSORA NOTA',
+      orElse: () =>
+          throw Exception('Impressora IMPRESSORA NOTA não encontrada'),
+    );
+
+    // Imprimir diretamente
+    await Printing.directPrintPdf(
+      printer: impressoraNota,
+      onLayout: (format) async => pdf.save(),
+    );
   }
 
   void adicionarProdutoAtual() {

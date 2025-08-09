@@ -758,7 +758,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ElevatedButton.icon(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => ProdutosView(),
               icon: const Icon(Icons.cancel),
               label: const Text('Cancelar'),
               style: ElevatedButton.styleFrom(
