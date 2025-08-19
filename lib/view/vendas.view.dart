@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -14,6 +15,8 @@ import 'package:senhorita/view/relatorios.view.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
 class VendasView extends StatefulWidget {
   const VendasView({super.key});
@@ -287,14 +290,18 @@ class _VendasViewState extends State<VendasView> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _imprimirNota(
-                List.from(itensVendidos),
-                valorFrete,
-                List.from(pagamentos),
-                _calcularTotalPago(), // <- aqui você deve passar o valor total pago
-              );
-            },
 
+              if (tipoNotaSelecionada == 'fiscal') {
+                _emitirNotaFiscal(itensVendidos, valorFrete, pagamentos);
+              } else {
+                _imprimirNota(
+                  List.from(itensVendidos),
+                  valorFrete,
+                  List.from(pagamentos),
+                  _calcularTotalPago(),
+                );
+              }
+            },
             child: const Text('🖨️ Imprimir Nota'),
           ),
           TextButton(
@@ -304,6 +311,334 @@ class _VendasViewState extends State<VendasView> {
         ],
       ),
     );
+  }
+
+  /// Função para definir automaticamente o NCM de acordo com a categoria
+  String _definirNCM(String categoria) {
+    switch (categoria.toUpperCase()) {
+      case "LINGERIE":
+      case "SUTIÃ":
+      case "CALCINHA":
+      case "CINTA MODELADORA":
+      case "MODELADOR":
+        return "62121000"; // Lingerie, cintas, sutiãs, etc.
+
+      case "BOLSAS":
+        return "42022220"; // Bolsas de uso pessoal
+
+      case "MODA PRAIA":
+      case "BIQUINI":
+      case "MAIÔ":
+        return "62111100"; // Roupas de banho femininas
+
+      case "JALECOS":
+      case "UNIFORMES":
+        return "62113300"; // Vestuário de trabalho (jalecos/uniformes)
+
+      case "ACESSÓRIOS":
+        return "61171000"; // Acessórios de vestuário (ex: echarpes, lenços)
+
+      case "PERFUMES":
+      case "COSMÉTICOS":
+        return "33030010"; // Perfumes e águas-de-colônia
+
+      default:
+        return "99999999"; // Outros (usar como fallback genérico)
+    }
+  }
+
+  Future<String?> _obterTokenValido() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final tokenSalvo = prefs.getString("access_token");
+    final expiraEm = prefs.getInt("expira_em");
+
+    final agora = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    if (tokenSalvo != null && expiraEm != null && agora < expiraEm) {
+      // ✅ Token ainda válido
+      return tokenSalvo;
+    }
+
+    // 🔄 Caso contrário, gera novo
+    final response = await http.post(
+      Uri.parse("https://auth.nuvemfiscal.com.br/oauth/token"),
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      body: {
+        "grant_type": "client_credentials",
+        "client_id": "BTvbSB2RnG56PUniqd0x",
+        "client_secret": "MZaGqkjQbFncM7ifIcYSrUrDkTU1v8cWg3yxbUIR",
+        "scope": "nfce",
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final novoToken = data["access_token"];
+      final expiraEmSegundos = (data["expires_in"] as num).toInt(); // força int
+      final validade = agora + expiraEmSegundos;
+
+      await prefs.setString("access_token", novoToken);
+      await prefs.setInt("expira_em", validade); // agora é int certinho
+
+      return novoToken;
+    } else {
+      print("Erro ao gerar token: ${response.body}");
+      return null;
+    }
+  }
+
+  Future<void> _emitirNotaFiscal(
+    List<Map<String, dynamic>> itensVendidos,
+    double valorFrete,
+    List<Map<String, dynamic>> pagamentos,
+  ) async {
+    if (itensVendidos.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Adicione produtos antes de finalizar.")),
+      );
+      return;
+    }
+
+    setState(() => carregandoBusca = true);
+
+    try {
+      final token = await _obterTokenValido();
+      if (token == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Erro ao obter token de autenticação.")),
+        );
+        return;
+      }
+
+      // Calcula valor total dinamicamente
+      final valorTotal = itensVendidos.fold<double>(0.0, (total, item) {
+        if (item.containsKey('tamanhos') &&
+            (item['tamanhos'] as Map).isNotEmpty) {
+          final tamanhos = Map<String, dynamic>.from(item['tamanhos']);
+          return total +
+              tamanhos.entries.fold<double>(
+                0.0,
+                (soma, e) =>
+                    soma + ((item['precoFinal'] ?? 0.0) * (e.value ?? 0)),
+              );
+        } else {
+          return total +
+              ((item['precoFinal'] ?? 0.0) * (item['quantidade'] ?? 1));
+        }
+      });
+
+      // Monta a lista de itens (det) dinamicamente
+      final List<Map<String, dynamic>> det = [];
+
+      for (var item in itensVendidos) {
+        final codigoBarras = item['codigoBarras']?.toString() ?? 'SEM GTIN';
+        final valorUnitario = (item['precoFinal'] ?? 0.0).toDouble();
+        final categoria = item['categoria'] ?? 'OUTROS';
+        final ncm = _definirNCM(categoria);
+
+        if (item.containsKey('tamanhos') &&
+            (item['tamanhos'] as Map).isNotEmpty) {
+          final tamanhos = Map<String, dynamic>.from(item['tamanhos']);
+          tamanhos.forEach((tamanho, qtd) {
+            if ((qtd ?? 0) > 0) {
+              det.add({
+                "nItem": (det.length + 1).toString(),
+                "prod": {
+                  "cProd": "${item['produtoId'] ?? ''}-$tamanho",
+                  "cEAN": codigoBarras,
+                  "xProd": "${item['produtoNome'] ?? ''} Tam: $tamanho",
+                  "NCM": ncm,
+                  "CFOP": "5102",
+                  "uCom": "UN",
+                  "qCom": qtd.toString(),
+                  "vUnCom": valorUnitario.toStringAsFixed(2),
+                  "vProd": (valorUnitario * qtd).toStringAsFixed(2),
+                  "cEANTrib": codigoBarras,
+                  "uTrib": "UN",
+                  "qTrib": qtd.toString(),
+                  "vUnTrib": valorUnitario.toStringAsFixed(2),
+                  "indTot": "1",
+                },
+                "imposto": {
+                  "ICMS": {
+                    "ICMSSN102": {"orig": 0, "CSOSN": "102"},
+                  },
+                },
+              });
+            }
+          });
+        } else {
+          final quantidadeVendida = item['quantidade'] ?? 1;
+          det.add({
+            "nItem": (det.length + 1).toString(),
+            "prod": {
+              "cProd": item['produtoId'] ?? '',
+              "cEAN": codigoBarras,
+              "xProd": item['produtoNome'] ?? '',
+              "NCM": ncm,
+              "CFOP": "5102",
+              "uCom": "UN",
+              "qCom": quantidadeVendida.toString(),
+              "vUnCom": valorUnitario.toStringAsFixed(2),
+              "vProd": (valorUnitario * quantidadeVendida).toStringAsFixed(2),
+              "cEANTrib": codigoBarras,
+              "uTrib": "UN",
+              "qTrib": quantidadeVendida.toString(),
+              "vUnTrib": valorUnitario.toStringAsFixed(2),
+              "indTot": "1",
+            },
+            "imposto": {
+              "ICMS": {
+                "ICMSSN102": {"orig": 0, "CSOSN": "102"},
+              },
+            },
+          });
+        }
+      }
+
+      // Garante ao menos 1 item se det ficar vazio
+      if (det.isEmpty) {
+        det.add({
+          "nItem": 1,
+          "prod": {
+            "cProd": "000",
+            "cEAN": "SEM GTIN",
+            "xProd": "Produto genérico",
+            "NCM": "99999999",
+            "CFOP": "5102",
+            "uCom": "UN",
+            "qCom": 1,
+            "vUnCom": 0.01,
+            "vProd": 0.01,
+            "cEANTrib": "SEM GTIN",
+            "uTrib": "UN",
+            "qTrib": 1,
+            "vUnTrib": 0.01,
+            "indTot": 1,
+          },
+          "imposto": {
+            "ICMS": {
+              "ICMSSN102": {"orig": 0, "CSOSN": "102"},
+            },
+          },
+        });
+      }
+
+      // Garante ao menos 1 pagamento
+      if (pagamentos.isEmpty) {
+        pagamentos.add({
+          "forma": "01",
+          "valor": valorTotal > 0 ? valorTotal : 0.01,
+        });
+      }
+
+      final nfceData = {
+        "infNFe": {
+          "versao": "4.00",
+          "ide": {
+            "cUF": 15,
+            "natOp": "Venda ao consumidor",
+            "serie": 1,
+            "nNF": DateTime.now().millisecondsSinceEpoch % 999999,
+            "dhEmi": DateTime.now().toIso8601String(),
+            "tpNF": 1,
+            "idDest": 1,
+            "cMunFG": "1500107",
+            "tpImp": 4,
+            "tpEmis": 1,
+            "finNFe": 1,
+            "indFinal": 1,
+            "indPres": 1,
+            "procEmi": 0,
+            "verProc": "1.0",
+          },
+          "emit": {
+            "CNPJ": "47179855000195",
+            "xNome": "SENHORITA CINTA MODELADORAS LTDA",
+            "xFant": "SENHORITA CINTA MODELADORAS",
+            "enderEmit": {
+              "xLgr": "Rua Barao do Rio Branco",
+              "nro": "1836",
+              "xBairro": "Centro",
+              "cMun": "1500107",
+              "xMun": "Abaetetuba",
+              "UF": "PA",
+              "CEP": "68440000",
+              "Fone": "9181480881",
+            },
+            "IE": "158462106",
+            "CRT": 1,
+          },
+          "dest": clienteSelecionado != null
+              ? {
+                  "CPF": clienteSelecionado!["cpf"],
+                  "xNome": clienteSelecionado!["nome"],
+                }
+              : null,
+          "det": det,
+          "total": {
+            "ICMSTot": {
+              "vProd": valorTotal,
+              "vFrete": valorFrete,
+              "vNF": valorTotal + valorFrete,
+              "vICMS": 0.0,
+              "vICMSDeson": 0.0,
+              "vFCP": 0.0,
+              "vBC": 0.0,
+              "vBCST": 0.0,
+              "vST": 0.0,
+              "vFCPST": 0.0,
+              "vFCPSTRet": 0.0,
+              "vSeg": 0.0,
+              "vDesc": 0.0,
+              "vII": 0.0,
+              "vIPI": 0.0,
+              "vIPIDevol": 0.0,
+              "vPIS": 0.0,
+              "vCOFINS": 0.0,
+              "vOutro": 0.0,
+            },
+          },
+          "transp": {"modFrete": 9},
+          "pag": {
+            "detPag": pagamentos.map((p) {
+              return {"tPag": p['forma'] ?? '01', "vPag": (p['valor'] ?? 0.0)};
+            }).toList(),
+          },
+        },
+        "ambiente": "producao",
+      };
+
+      final response = await http.post(
+        Uri.parse("https://api.nuvemfiscal.com.br/nfce"),
+        headers: {
+          "Authorization": "Bearer $token",
+          "Content-Type": "application/json",
+        },
+        body: jsonEncode(nfceData),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        print("NFC-e emitida com sucesso: ${data['chave']}");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("NFC-e emitida com sucesso!")),
+        );
+      } else {
+        print("Erro NFC-e: ${response.body}");
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Erro ao emitir NFC-e: ${response.body}")),
+        );
+      }
+    } catch (e) {
+      print("Erro ao emitir NFC-e: $e");
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Erro ao emitir NFC-e: $e")));
+    } finally {
+      setState(() => carregandoBusca = false);
+    }
   }
 
   Future<void> _imprimirNota(
