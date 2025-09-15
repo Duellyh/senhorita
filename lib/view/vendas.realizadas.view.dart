@@ -114,6 +114,102 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
         });
   }
 
+  Future<void> _cancelarVenda(
+    String vendaId,
+    Map<String, dynamic> venda,
+  ) async {
+    if (tipoUsuario != 'admin') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ação permitida apenas para administradores.'),
+        ),
+      );
+      return;
+    }
+
+    final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        // 1) Devolve estoque para cada item
+        for (final item in itens) {
+          // tenta descobrir o id do produto em diferentes chaves usuais
+          final produtoId =
+              (item['produtoId'] ??
+                      item['idProduto'] ??
+                      item['produtoDocId'] ??
+                      item['id']) // se você usa outra chave, ajuste aqui
+                  ?.toString();
+
+          if (produtoId == null || produtoId.isEmpty) {
+            throw Exception(
+              'Item sem produtoId. Ajuste o campo do item da venda.',
+            );
+          }
+
+          final prodRef = FirebaseFirestore.instance
+              .collection('produtos')
+              .doc(produtoId);
+          final prodSnap = await tx.get(prodRef);
+          if (!prodSnap.exists) {
+            throw Exception('Produto $produtoId não encontrado.');
+          }
+
+          final prodData = prodSnap.data() as Map<String, dynamic>;
+          final int qtdVendida = (item['quantidade'] ?? 1) is int
+              ? (item['quantidade'] as int)
+              : int.tryParse(item['quantidade'].toString()) ?? 1;
+
+          final String? tam = (item['tamanho']?.toString().isNotEmpty ?? false)
+              ? item['tamanho'].toString()
+              : null;
+
+          final Map<String, dynamic>? tamanhos =
+              (prodData['tamanhos'] is Map<String, dynamic>)
+              ? Map<String, dynamic>.from(prodData['tamanhos'])
+              : null;
+
+          // Atualiza estoque
+          if (tamanhos != null && tam != null) {
+            final atual = (tamanhos[tam] ?? 0) is int
+                ? tamanhos[tam] as int
+                : int.tryParse((tamanhos[tam] ?? '0').toString()) ?? 0;
+            final novoTam = atual + qtdVendida;
+
+            // Atualiza tamanho específico
+            tx.update(prodRef, {'tamanhos.$tam': novoTam});
+
+            // Se você mantém um campo 'quantidade' total, atualize também:
+            final totalAtual = (prodData['quantidade'] ?? 0) is int
+                ? prodData['quantidade'] as int
+                : int.tryParse((prodData['quantidade'] ?? '0').toString()) ?? 0;
+            tx.update(prodRef, {'quantidade': totalAtual + qtdVendida});
+          } else {
+            // Produto sem variação de tamanho
+            final totalAtual = (prodData['quantidade'] ?? 0) is int
+                ? prodData['quantidade'] as int
+                : int.tryParse((prodData['quantidade'] ?? '0').toString()) ?? 0;
+            tx.update(prodRef, {'quantidade': totalAtual + qtdVendida});
+          }
+        }
+
+        // 2) Remove a venda da coleção
+        final vendaRef = FirebaseFirestore.instance
+            .collection('vendas')
+            .doc(vendaId);
+        tx.delete(vendaRef);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Venda cancelada e estoque devolvido.')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erro ao cancelar venda: $e')));
+    }
+  }
+
   Future<void> _selecionarIntervaloDatas() async {
     final hoje = DateTime.now();
     final intervalo = await showDateRangePicker(
@@ -562,60 +658,97 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
                     ),
                   ),
                 Expanded(
-                  child:
-                      StreamBuilder<
-                        List<QueryDocumentSnapshot<Map<String, dynamic>>>
-                      >(
-                        stream: _getVendasStream(),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState ==
-                              ConnectionState.waiting) {
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          }
-                          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                            return const Center(
-                              child: Text('Nenhuma venda encontrada.'),
-                            );
-                          }
+                  child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                    stream: _getVendasStream(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                        return const Center(
+                          child: Text('Nenhuma venda encontrada.'),
+                        );
+                      }
+                      final vendas = snapshot.data!;
 
-                          final vendas = snapshot.data!;
+                      return ListView.builder(
+                        itemCount: vendas.length,
+                        itemBuilder: (context, index) {
+                          final vendaDoc = vendas[index];
+                          final vendaId =
+                              vendaDoc.id; // <- precisamos para excluir
+                          final venda = vendaDoc.data();
+                          final dataVenda = (venda['dataVenda'] as Timestamp)
+                              .toDate();
+                          final cliente =
+                              venda['cliente']?['nome'] ??
+                              'Cliente não informado';
 
-                          return ListView.builder(
-                            itemCount: vendas.length,
-                            itemBuilder: (context, index) {
-                              final venda = vendas[index].data();
-                              final dataVenda =
-                                  (venda['dataVenda'] as Timestamp).toDate();
-                              final cliente =
-                                  venda['cliente']?['nome'] ??
-                                  'Cliente não informado';
-
-                              return Card(
-                                margin: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
+                          return Card(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            child: ListTile(
+                              title: Text(
+                                'Venda - R\$ ${venda['totalVenda'].toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
                                 ),
-                                child: ListTile(
-                                  title: Text(
-                                    'Venda - R\$ ${venda['totalVenda'].toStringAsFixed(2)}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  subtitle: Text(
-                                    '$cliente - ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}',
-                                  ),
-                                  onTap: () {
-                                    _mostrarDetalhesVenda(venda);
-                                  },
-                                ),
-                              );
-                            },
+                              ),
+                              subtitle: Text(
+                                '$cliente - ${DateFormat('dd/MM/yyyy HH:mm').format(dataVenda)}',
+                              ),
+                              onTap: () => _mostrarDetalhesVenda(venda),
+                              trailing: tipoUsuario == 'admin'
+                                  ? IconButton(
+                                      icon: const Icon(
+                                        Icons.cancel,
+                                        color: Colors.redAccent,
+                                      ),
+                                      tooltip: 'Cancelar venda',
+                                      onPressed: () async {
+                                        final confirma = await showDialog<bool>(
+                                          context: context,
+                                          builder: (_) => AlertDialog(
+                                            title: const Text('Cancelar venda'),
+                                            content: const Text(
+                                              'Tem certeza que deseja cancelar esta venda? '
+                                              'O estoque será devolvido e a venda será removida.',
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(
+                                                  context,
+                                                  false,
+                                                ),
+                                                child: const Text('Não'),
+                                              ),
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(
+                                                  context,
+                                                  true,
+                                                ),
+                                                child: const Text(
+                                                  'Sim, cancelar',
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+
+                                        if (confirma == true) {
+                                          await _cancelarVenda(vendaId, venda);
+                                        }
+                                      },
+                                    )
+                                  : null,
+                            ),
                           );
                         },
-                      ),
+                      );
+                    },
+                  ),
                 ),
               ],
             ),

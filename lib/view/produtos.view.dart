@@ -1,4 +1,6 @@
 // ignore_for_file: use_build_context_synchronously
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +32,25 @@ class _ProdutosViewState extends State<ProdutosView> {
   final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
+  Timer? _debounce;
+
+  String _norm(String s) {
+    // normaliza para comparar/buscar (minúsculo, sem acento, sem espaços múltiplos)
+    final lower = s.toLowerCase().trim();
+    const comAcento = 'áàâãäéèêëíìîïóòôõöúùûüçñ';
+    const semAcento = 'aaaaaeeeeiiiiooooouuuucn';
+    var out = lower;
+    for (int i = 0; i < comAcento.length; i++) {
+      out = out.replaceAll(comAcento[i], semAcento[i]);
+    }
+    return out.replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  List<String> _tokenize(String termo) {
+    return _norm(
+      termo,
+    ).split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  }
 
   @override
   void initState() {
@@ -341,10 +362,9 @@ class _ProdutosViewState extends State<ProdutosView> {
   }
 
   Stream<QuerySnapshot> _buscarProdutosFirestore(String termo) {
-    final colecao = FirebaseFirestore.instance.collection('produtos');
-    if (termo.isEmpty) return colecao.snapshots();
-    final termoLower = termo.toLowerCase();
-    return colecao.where('busca', arrayContains: termoLower).snapshots();
+    // Sem depender do campo 'busca' no Firestore.
+    // Se quiser, pode filtrar por 'ativo': .where('ativo', isEqualTo: true)
+    return FirebaseFirestore.instance.collection('produtos').snapshots();
   }
 
   @override
@@ -397,7 +417,14 @@ class _ProdutosViewState extends State<ProdutosView> {
             padding: const EdgeInsets.all(8),
             child: TextField(
               controller: searchController,
-              onChanged: (value) => setState(() => searchTerm = value),
+              onChanged: (value) {
+                _debounce?.cancel();
+                _debounce = Timer(const Duration(milliseconds: 250), () {
+                  setState(() {
+                    searchTerm = value;
+                  });
+                });
+              },
               decoration: InputDecoration(
                 hintText: 'Buscar por nome, categoria, ID...',
                 prefixIcon: const Icon(Icons.search),
@@ -507,16 +534,60 @@ class _ProdutosViewState extends State<ProdutosView> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          if (!snapshot.hasData) {
             return const Center(child: Text('Nenhum produto encontrado.'));
           }
 
-          final produtos = snapshot.data!.docs;
+          final produtosRaw = snapshot.data!.docs;
+
+          final palavrasBusca = _tokenize(searchTerm);
+          final bool temBusca = palavrasBusca.isNotEmpty;
+
+          String _alvoProduto(DocumentSnapshot doc) {
+            final d = doc.data() as Map<String, dynamic>;
+            final codigo = (d['codigoBarras'] ?? doc.id).toString();
+            final nome = (d['nome'] ?? '').toString();
+            final categoria = (d['categoria'] ?? '').toString();
+            final cor = (d['cor'] ?? '').toString();
+            final loja = (d['loja'] ?? '').toString();
+            final desc = (d['descricao'] ?? '').toString();
+
+            // normaliza tudo
+            return _norm('$nome $categoria $codigo $cor $loja $desc');
+          }
+
+          // AND para todas as palavras; a última pode ser parcial (já que está digitando)
+          final produtosFiltrados = !temBusca
+              ? produtosRaw
+              : produtosRaw.where((doc) {
+                  final alvo = _alvoProduto(doc);
+                  if (palavrasBusca.length == 1) {
+                    // único termo: aceita parcial
+                    return alvo.contains(palavrasBusca.first);
+                  } else {
+                    final anteriores = palavrasBusca.sublist(
+                      0,
+                      palavrasBusca.length - 1,
+                    );
+                    final ultimo = palavrasBusca.last;
+                    final okAnteriores = anteriores.every(
+                      (p) => alvo.contains(p),
+                    );
+                    final okUltimo = alvo.contains(ultimo); // parcial do último
+                    return okAnteriores && okUltimo;
+                  }
+                }).toList();
+
+          if (produtosFiltrados.isEmpty) {
+            return const Center(child: Text('Nenhum produto encontrado.'));
+          }
+
           return ListView.builder(
             padding: const EdgeInsets.all(8),
-            itemCount: produtos.length,
+            itemCount: produtosFiltrados.length,
             itemBuilder: (context, index) {
-              final produto = produtos[index];
+              final produto = produtosFiltrados[index];
+
               final data = produto.data() as Map<String, dynamic>;
               final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
               bool estoqueBaixo = false;
