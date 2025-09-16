@@ -1,4 +1,6 @@
 // ignore_for_file: use_build_context_synchronously
+import 'dart:math' as math;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:diacritic/diacritic.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -45,6 +47,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
   Map<String, int> formasPagamento = {};
   Map<String, double> vendasPorCategoria = {};
   int _touchedIndexCategorias = -1;
+  int _touchedIndexPagamentos = -1;
 
   int totalCanceladas = 0;
   double valorCancelado = 0;
@@ -798,7 +801,12 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                   padding: const EdgeInsets.all(16),
                   child: SizedBox(
                     height: 260,
-                    child: _BarChartContainer(data: vendasPorDia),
+                    child: _BarChartVendasDia(
+                      data: vendasPorDia,
+                      chartHeight:
+                          220, // altura só do gráfico (a legenda vem abaixo)
+                      showLegend: true,
+                    ),
                   ),
                 ),
               ),
@@ -820,7 +828,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: _buildPieChart(),
+                  child: _buildPieChartPagamentos(showLegend: true),
                 ),
               ),
               const SizedBox(height: 20),
@@ -839,9 +847,12 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: SizedBox(
-                    height: 260,
-                    child: _BarChartFuncionarios(data: vendasPorFuncionario),
+                  child: _BarChartFuncionarios(
+                    data: vendasPorFuncionario,
+                    maxBars: 7, // opcional: Top 7 + OUTROS
+                    showLegend: true, // <- ativa a legenda
+                    chartHeight:
+                        260, // altura do gráfico (a legenda fica abaixo)
                   ),
                 ),
               ),
@@ -1008,7 +1019,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                   radius: isTouched ? 74 : 64, // destaque ao toque
                   titleStyle: const TextStyle(
                     fontSize: 11,
-                    color: Colors.white,
+                    color: Color.fromARGB(255, 10, 10, 10),
                     fontWeight: FontWeight.bold,
                   ),
                   // empurra o texto para fora do centro (melhora legibilidade)
@@ -1124,27 +1135,112 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     );
   }
 
-  Widget _buildPieChart() {
+  Widget _buildPieChartPagamentos({bool showLegend = true}) {
     if (formasPagamento.isEmpty) {
       return const Center(child: Text("Sem dados suficientes"));
     }
 
-    return SizedBox(
-      height: 200,
-      child: PieChart(
-        PieChartData(
-          sections: formasPagamento.entries.map((e) {
-            final color = _getColorForPayment(e.key);
-            return PieChartSectionData(
-              value: e.value.toDouble(),
-              color: color,
-              title: '${e.key} (${e.value})',
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, color: Colors.white),
-            );
-          }).toList(),
+    // Ordena por quantidade (desc) e agrupa o resto em "Outras"
+    const int maxSlices = 6; // 5 maiores + "Outras"
+    final entries = formasPagamento.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final List<MapEntry<String, int>> main = entries
+        .take(maxSlices - 1)
+        .toList();
+    final int others = entries
+        .skip(maxSlices - 1)
+        .fold(0, (s, e) => s + e.value);
+
+    final List<MapEntry<String, int>> toPlot = [
+      ...main,
+      if (others > 0) const MapEntry('Outras', 0),
+    ];
+    if (others > 0) {
+      toPlot[toPlot.length - 1] = MapEntry('Outras', others);
+    }
+
+    final int total = toPlot.fold(0, (s, e) => s + e.value);
+    if (total <= 0) {
+      return const Center(child: Text("Sem dados suficientes"));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 220,
+          child: PieChart(
+            PieChartData(
+              startDegreeOffset: -90,
+              sectionsSpace: 2,
+              centerSpaceRadius: 48, // donut
+              pieTouchData: PieTouchData(
+                touchCallback: (event, resp) {
+                  setState(() {
+                    _touchedIndexPagamentos =
+                        resp?.touchedSection?.touchedSectionIndex ?? -1;
+                  });
+                },
+              ),
+              sections: List.generate(toPlot.length, (i) {
+                final e = toPlot[i];
+                final pct = e.value / total;
+                final bool isTouched = i == _touchedIndexPagamentos;
+                final bool showTitle =
+                    pct >= 0.06 || isTouched; // >=6% ou tocado
+
+                final String title = showTitle
+                    ? '${e.key}\n${e.value} (${(pct * 100).toStringAsFixed(0)}%)'
+                    : '';
+
+                return PieChartSectionData(
+                  value: e.value.toDouble(),
+                  color: _getColorForPayment(e.key),
+                  title: title,
+                  radius: isTouched ? 72 : 62,
+                  titleStyle: const TextStyle(
+                    fontSize: 11,
+                    color: Color.fromARGB(255, 7, 7, 7),
+                    fontWeight: FontWeight.bold,
+                  ),
+                  titlePositionPercentageOffset: 0.6,
+                );
+              }),
+            ),
+          ),
         ),
-      ),
+        const SizedBox(height: 8),
+        if (showLegend) _buildLegendPagamentos(toPlot, total),
+      ],
+    );
+  }
+
+  Widget _buildLegendPagamentos(List<MapEntry<String, int>> data, int total) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: data.map((e) {
+        final pct = total == 0 ? 0 : (e.value / total) * 100;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: _getColorForPayment(e.key),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '${e.key}: ${e.value} (${pct.toStringAsFixed(0)}%)',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        );
+      }).toList(),
     );
   }
 
@@ -1306,179 +1402,498 @@ class _BarChartCanceladas extends StatelessWidget {
   }
 }
 
-class _BarChartContainer extends StatelessWidget {
-  final Map<String, double> data;
-  const _BarChartContainer({required this.data});
+class _BarChartVendasDia extends StatefulWidget {
+  final Map<String, double> data; // chave 'dd/MM' -> valor total R$
+  final double chartHeight;
+  final bool showLegend;
+
+  const _BarChartVendasDia({
+    Key? key,
+    required this.data,
+    this.chartHeight = 260,
+    this.showLegend = true,
+  }) : super(key: key);
+
+  @override
+  State<_BarChartVendasDia> createState() => _BarChartVendasDiaState();
+}
+
+class _BarChartVendasDiaState extends State<_BarChartVendasDia> {
+  int _touchedIndex = -1;
+
+  // tenta ordenar 'dd/MM'
+  List<MapEntry<String, double>> _sortedEntries(Map<String, double> m) {
+    final list = m.entries.toList();
+    int _ordKey(String k) {
+      final parts = k.split('/');
+      if (parts.length == 2) {
+        final d = int.tryParse(parts[0]) ?? 0;
+        final mo = int.tryParse(parts[1]) ?? 0;
+        return mo * 31 + d;
+      }
+      return 0;
+    }
+
+    list.sort((a, b) => _ordKey(a.key).compareTo(_ordKey(b.key)));
+    return list;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final dias = data.keys.toList();
-    final valores = data.values.toList();
-
-    if (valores.isEmpty) {
+    if (widget.data.isEmpty) {
       return const Center(child: Text('Sem dados para mostrar'));
     }
 
+    final entries = _sortedEntries(widget.data);
+    final dias = entries.map((e) => e.key).toList();
+    final valores = entries.map((e) => e.value).toList();
+
+    final total = valores.fold(0.0, (s, v) => s + v);
     final maxValor = valores.reduce((a, b) => a > b ? a : b);
     final maxY = (maxValor * 1.2).ceilToDouble();
+    final media = total / valores.length;
+    final double tick = math.max(maxY / 5, 1.0);
 
-    return BarChart(
-      BarChartData(
-        alignment: BarChartAlignment.spaceBetween,
-        maxY: maxY,
-        minY: 0,
-        barGroups: List.generate(dias.length, (i) {
-          return BarChartGroupData(
-            x: i,
-            barRods: [
-              BarChartRodData(
-                toY: valores[i],
-                color: const Color.fromARGB(255, 39, 176, 105),
-                width: 12,
-                borderRadius: BorderRadius.circular(6),
-                backDrawRodData: BackgroundBarChartRodData(
-                  show: true,
-                  toY:
-                      maxY, // aqui deve ser o maxY para desenhar fundo completo
-                  color: Colors.grey[200]!,
+    // índice do “melhor dia”
+    int bestIdx = 0;
+    for (int i = 1; i < valores.length; i++) {
+      if (valores[i] > valores[bestIdx]) bestIdx = i;
+    }
+
+    // espaçar rótulos do eixo X
+    final step = (dias.length / 10).ceil().clamp(1, 9999);
+
+    const barColor = Color.fromARGB(255, 39, 176, 105);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: widget.chartHeight,
+          child: BarChart(
+            BarChartData(
+              alignment: BarChartAlignment.spaceBetween,
+              maxY: maxY,
+              minY: 0,
+              barTouchData: BarTouchData(
+                enabled: true,
+                touchTooltipData: BarTouchTooltipData(
+                  // tooltipBgColor / tooltipBackgroundColor variam por versão do fl_chart
+                  // Se sua versão suportar, descomente UMA:
+                  // tooltipBgColor: Colors.black87,
+                  // tooltipBackgroundColor: Colors.black87,
+                  tooltipPadding: const EdgeInsets.all(8),
+                  tooltipMargin: 8,
+                  getTooltipItem: (group, gi, rod, ri) {
+                    final i = group.x.toInt();
+                    final valor = rod.toY;
+                    final pct = total == 0 ? 0 : (valor / total * 100);
+                    return BarTooltipItem(
+                      '${dias[i]}\n${_brl.format(valor)}  • ${pct.toStringAsFixed(1)}%',
+                      const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    );
+                  },
+                ),
+                touchCallback: (event, response) {
+                  setState(
+                    () => _touchedIndex =
+                        response?.spot?.touchedBarGroupIndex ?? -1,
+                  );
+                },
+              ),
+              extraLinesData: ExtraLinesData(
+                horizontalLines: [
+                  HorizontalLine(
+                    y: media,
+                    color: Colors.grey.shade400,
+                    strokeWidth: 1,
+                    dashArray: const [6, 4],
+                    label: HorizontalLineLabel(
+                      alignment: Alignment.centerRight,
+                      show: true,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.black54,
+                      ),
+                      labelResolver: (_) =>
+                          'média ${_brlCompact.format(media)}',
+                    ),
+                  ),
+                ],
+              ),
+              barGroups: List.generate(dias.length, (i) {
+                final v = valores[i];
+                final isTouched = i == _touchedIndex;
+                return BarChartGroupData(
+                  x: i,
+                  barRods: [
+                    BarChartRodData(
+                      toY: v,
+                      color: barColor,
+                      width: isTouched ? 16 : 12,
+                      borderRadius: BorderRadius.circular(6),
+                      backDrawRodData: BackgroundBarChartRodData(
+                        show: true,
+                        toY: maxY,
+                        color: Colors.grey[200]!,
+                      ),
+                    ),
+                  ],
+                  showingTooltipIndicators: isTouched ? const [0] : const [],
+                );
+              }),
+              titlesData: FlTitlesData(
+                show: true,
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 28,
+                    getTitlesWidget: (value, meta) {
+                      final i = value.toInt();
+                      if (i < 0 || i >= dias.length)
+                        return const SizedBox.shrink();
+                      if (i % step != 0 && i != dias.length - 1) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          dias[i],
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 56,
+                    interval: tick,
+                    getTitlesWidget: (value, meta) {
+                      final s = _brlCompact.format(value);
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Text(
+                          s,
+                          style: const TextStyle(fontSize: 10),
+                          textAlign: TextAlign.right,
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                horizontalInterval: tick,
+                getDrawingHorizontalLine: (value) =>
+                    FlLine(color: Colors.grey[300]!, strokeWidth: 1),
+              ),
+              borderData: FlBorderData(show: false),
+            ),
+          ),
+        ),
+
+        // ====== LEGENDA / RESUMO ======
+        if (widget.showLegend) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              _legendDot(text: 'Total: ${_brl.format(total)}', color: barColor),
+              _legendDot(
+                text: 'Média/dia: ${_brl.format(media)}',
+                color: Colors.grey.shade600,
+              ),
+              _legendDot(
+                text:
+                    'Melhor dia: ${dias[bestIdx]} (${_brl.format(valores[bestIdx])})',
+                color: Colors.amber.shade600,
+              ),
             ],
-          );
-        }),
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: false,
-          horizontalInterval: maxY / 5, // intervalo dinâmico
-          getDrawingHorizontalLine: (value) =>
-              FlLine(color: Colors.grey[300]!, strokeWidth: 1),
-        ),
-        titlesData: FlTitlesData(
-          show: true,
-          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 28,
-              getTitlesWidget: (value, meta) {
-                final i = value.toInt();
-                if (i < 0 || i >= dias.length) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(dias[i], style: const TextStyle(fontSize: 11)),
-                );
-              },
-            ),
           ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 40,
-              interval: maxY / 5,
-              getTitlesWidget: (value, meta) {
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    'R\$ ${value.toInt()}',
-                    style: const TextStyle(fontSize: 10),
-                    textAlign: TextAlign.right,
-                  ),
-                );
-              },
-            ),
-          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _legendDot({required String text, required Color color}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
-        borderData: FlBorderData(show: false),
-      ),
+        const SizedBox(width: 6),
+        Text(text, style: const TextStyle(fontSize: 12)),
+      ],
     );
   }
 }
 
-class _BarChartFuncionarios extends StatelessWidget {
+final NumberFormat _brl = NumberFormat.currency(locale: 'pt_BR', symbol: r'R$');
+final NumberFormat _brlCompact = NumberFormat.compactCurrency(
+  locale: 'pt_BR',
+  symbol: r'R$',
+);
+
+class _BarChartFuncionarios extends StatefulWidget {
   final Map<String, double> data;
-  const _BarChartFuncionarios({required this.data});
+  final int maxBars;
+  final bool showLegend;
+  final double chartHeight;
+
+  const _BarChartFuncionarios({
+    Key? key,
+    required this.data,
+    this.maxBars = 7,
+    this.showLegend = false,
+    this.chartHeight = 260,
+  }) : super(key: key);
+
+  @override
+  State<_BarChartFuncionarios> createState() => _BarChartFuncionariosState();
+}
+
+class _BarChartFuncionariosState extends State<_BarChartFuncionarios> {
+  int _touchedIndex = -1;
+
+  Color _barColorFor(int i, String label) {
+    if (i == 0) return const Color(0xFFF59E0B); // “ouro” pro top 1
+    const palette = [
+      Color(0xFF3B82F6), // blue
+      Color(0xFF10B981), // emerald
+      Color(0xFF8B5CF6), // violet
+      Color(0xFFEF4444), // red
+      Color(0xFF14B8A6), // teal
+      Color(0xFF6366F1), // indigo
+      Color(0xFFF97316), // orange
+      Color(0xFF06B6D4), // cyan
+    ];
+    return palette[(label.hashCode & 0x7fffffff) % palette.length];
+  }
 
   @override
   Widget build(BuildContext context) {
-    final nomes = data.keys.toList();
-    final valores = data.values.toList();
-
-    if (valores.isEmpty) {
+    if (widget.data.isEmpty) {
       return const Center(child: Text('Sem dados para mostrar'));
     }
 
-    final maxValor = valores.reduce((a, b) => a > b ? a : b);
-    final maxY = (maxValor * 1.2).ceilToDouble();
+    // Ordena e aplica Top N + OUTROS
+    final entries = widget.data.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final bars = <MapEntry<String, double>>[
+      ...entries.take(widget.maxBars),
+      if (entries.length > widget.maxBars)
+        MapEntry(
+          'OUTROS',
+          entries.skip(widget.maxBars).fold(0.0, (s, e) => s + e.value),
+        ),
+    ];
 
-    return BarChart(
-      BarChartData(
-        alignment: BarChartAlignment.spaceAround,
-        maxY: maxY,
-        minY: 0,
-        barGroups: List.generate(nomes.length, (i) {
-          return BarChartGroupData(
-            x: i,
-            barRods: [
-              BarChartRodData(
-                toY: valores[i],
-                color: const Color.fromARGB(255, 255, 120, 80),
-                width: 14,
-                borderRadius: BorderRadius.circular(4),
-                backDrawRodData: BackgroundBarChartRodData(
-                  show: true,
-                  toY: maxY,
-                  color: Colors.grey[200]!,
+    final labels = bars.map((e) => e.key).toList();
+    final values = bars.map((e) => e.value).toList();
+    final total = values.fold(0.0, (s, v) => s + v);
+    final maxValor = values.reduce((a, b) => a > b ? a : b);
+    final maxY = (maxValor * 1.2).ceilToDouble();
+    final media = total / values.length;
+    final double tick = math.max(maxY / 5, 1.0);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: widget.chartHeight,
+          child: BarChart(
+            BarChartData(
+              alignment: BarChartAlignment.spaceAround,
+              maxY: maxY,
+              minY: 0,
+              barTouchData: BarTouchData(
+                enabled: true,
+                touchTooltipData: BarTouchTooltipData(
+                  // tooltipBgColor / tooltipBackgroundColor variam por versão.
+                  // Se sua versão suportar, descomente UMA:
+                  // tooltipBgColor: Colors.black87,
+                  // tooltipBackgroundColor: Colors.black87,
+                  tooltipPadding: const EdgeInsets.all(8),
+                  tooltipMargin: 8,
+                  getTooltipItem: (group, gi, rod, ri) {
+                    final i = group.x.toInt();
+                    final nome = labels[i];
+                    final valor = rod.toY;
+                    final pct = total == 0 ? 0 : (valor / total * 100);
+                    return BarTooltipItem(
+                      '$nome\n${_brl.format(valor)}  • ${pct.toStringAsFixed(1)}%',
+                      const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    );
+                  },
+                ),
+                touchCallback: (event, response) {
+                  setState(
+                    () => _touchedIndex =
+                        response?.spot?.touchedBarGroupIndex ?? -1,
+                  );
+                },
+              ),
+              extraLinesData: ExtraLinesData(
+                horizontalLines: [
+                  HorizontalLine(
+                    y: media,
+                    color: Colors.grey.shade400,
+                    strokeWidth: 1,
+                    dashArray: const [6, 4],
+                    label: HorizontalLineLabel(
+                      alignment: Alignment.centerRight,
+                      show: true,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.black54,
+                      ),
+                      labelResolver: (_) =>
+                          'média ${_brlCompact.format(media)}',
+                    ),
+                  ),
+                ],
+              ),
+              barGroups: List.generate(labels.length, (i) {
+                final v = values[i];
+                final isTouched = i == _touchedIndex;
+                return BarChartGroupData(
+                  x: i,
+                  barRods: [
+                    BarChartRodData(
+                      toY: v,
+                      color: _barColorFor(i, labels[i]),
+                      width: 18,
+                      borderRadius: BorderRadius.circular(6),
+                      backDrawRodData: BackgroundBarChartRodData(
+                        show: true,
+                        toY: maxY,
+                        color: Colors.grey[200]!,
+                      ),
+                    ),
+                  ],
+                  showingTooltipIndicators: isTouched ? const [0] : const [],
+                );
+              }),
+              titlesData: FlTitlesData(
+                show: true,
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 48,
+                    getTitlesWidget: (value, meta) {
+                      final i = value.toInt();
+                      if (i < 0 || i >= labels.length) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 72),
+                          child: Text(
+                            labels[i],
+                            textAlign: TextAlign.center,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 2,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 56,
+                    interval: tick,
+                    getTitlesWidget: (value, meta) {
+                      final s = _brlCompact.format(value);
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Text(
+                          s,
+                          style: const TextStyle(fontSize: 10),
+                          textAlign: TextAlign.right,
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
-            ],
-          );
-        }),
-        titlesData: FlTitlesData(
-          show: true,
-          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 36,
-              getTitlesWidget: (value, meta) {
-                final i = value.toInt();
-                if (i < 0 || i >= nomes.length) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(nomes[i], style: const TextStyle(fontSize: 10)),
-                );
-              },
-            ),
-          ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 40,
-              interval: maxY / 5,
-              getTitlesWidget: (value, meta) {
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    'R\$ ${value.toInt()}',
-                    style: const TextStyle(fontSize: 10),
-                    textAlign: TextAlign.right,
-                  ),
-                );
-              },
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                horizontalInterval: tick,
+                getDrawingHorizontalLine: (value) =>
+                    FlLine(color: Colors.grey[300]!, strokeWidth: 1),
+              ),
+              borderData: FlBorderData(show: false),
             ),
           ),
         ),
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: false,
-          horizontalInterval: maxY / 5,
-          getDrawingHorizontalLine: (value) =>
-              FlLine(color: Colors.grey[300]!, strokeWidth: 1),
-        ),
-        borderData: FlBorderData(show: false),
-      ),
+
+        // ====== LEGENDA ======
+        if (widget.showLegend) ...[
+          const SizedBox(height: 8),
+          _buildLegend(labels, values, total),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildLegend(List<String> labels, List<double> values, double total) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: List.generate(labels.length, (i) {
+        final nome = labels[i];
+        final valor = values[i];
+        final pct = total == 0 ? 0 : (valor / total) * 100;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: _barColorFor(i, nome),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '$nome: ${_brl.format(valor)} (${pct.toStringAsFixed(0)}%)',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        );
+      }),
     );
   }
 }
