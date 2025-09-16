@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "C:/Users/DH GAMER/senhorita/linux"
+    "cmake.sourceDirectory": "C:/Users/DH GAMER/senhorita/linux",
+    "cmake.ignoreCMakeListsMissing": true
 }
