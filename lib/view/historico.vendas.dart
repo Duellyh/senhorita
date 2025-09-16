@@ -75,16 +75,19 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
     }
   }
 
-  void _mostrarDetalhesVenda(Map<String, dynamic> venda) {
+  void _mostrarDetalhesVenda(Map<String, dynamic> venda, String vendaId) {
     final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? []);
     final cliente = venda['cliente']?['nome'] ?? 'Não informado';
     final telefone = venda['cliente']?['telefone'] ?? '';
     final dataVenda = (venda['dataVenda'] as Timestamp).toDate();
+    final bool jaCancelada =
+        (venda['cancelada'] == true) ||
+        ((venda['status'] ?? '') == 'cancelada');
 
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Detalhes da Venda'),
+        title: Text(jaCancelada ? 'Venda (CANCELADA)' : 'Detalhes da Venda'),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
@@ -158,10 +161,21 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Voltar'),
           ),
+          if (!jaCancelada /* && tipoUsuario == 'admin' */ )
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context); // fecha detalhes
+                _confirmarCancelamento(vendaId, venda); // <<<<<<<<<<<<<<
+              },
+              child: const Text(
+                'Cancelar venda',
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              _imprimirNotaVenda(venda); // Chama a impressão
+              _imprimirNotaVenda(venda);
             },
             child: const Text('Imprimir 2ª Via'),
           ),
@@ -986,7 +1000,9 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
                           return ListView.builder(
                             itemCount: vendas.length,
                             itemBuilder: (context, index) {
-                              final venda = vendas[index].data();
+                              final vendaDoc = vendas[index];
+                              final venda = vendaDoc.data();
+
                               DateTime dataVenda;
 
                               final rawData = venda['dataVenda'];
@@ -1056,11 +1072,11 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
                                       color: Colors.purple,
                                     ),
                                     onPressed: () {
-                                      _mostrarDetalhesVenda(venda);
+                                      _mostrarDetalhesVenda(venda, vendaDoc.id);
                                     },
                                   ),
                                   onTap: () {
-                                    _mostrarDetalhesVenda(venda);
+                                    _mostrarDetalhesVenda(venda, vendaDoc.id);
                                   },
                                 ),
                               );
@@ -1072,6 +1088,328 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
               ],
             ),
     );
+  }
+
+  void _confirmarCancelamento(
+    String vendaId,
+    Map<String, dynamic> venda,
+  ) async {
+    final motivoCtrl = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirmar cancelamento'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Tem certeza que deseja cancelar esta venda? '
+              'O estoque dos itens será devolvido.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: motivoCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Motivo (opcional)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 2,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Não'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Sim, cancelar'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      await _cancelarVenda(vendaId, venda, motivoCtrl.text.trim());
+    }
+  }
+
+  String _normKey(String s) =>
+      removeDiacritics(s.trim().toUpperCase()).replaceAll(RegExp(r'\s+'), '');
+
+  String? _resolveProdutoIdBruto(Map<String, dynamic> item) {
+    // tenta várias formas comuns de vir o id do produto no item
+    final cands = <dynamic>[
+      item['produtoId'],
+      item['idProduto'],
+      item['id_produto'],
+      item['produtoID'],
+      (item['produto'] is Map ? (item['produto'] as Map)['id'] : null),
+    ].where((e) => e != null).map((e) => e.toString().trim()).toList();
+
+    for (final c in cands) {
+      if (c.isNotEmpty) return c;
+    }
+    return null;
+  }
+
+  int _resolveQtd(dynamic v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v == null) return 0;
+    final s = v.toString().trim();
+    if (s.isEmpty) return 0;
+    return int.tryParse(s) ?? 0;
+  }
+
+  String? _resolveTamanhoBruto(Map<String, dynamic> item) {
+    final cands = <dynamic>[item['tamanho'], item['tam'], item['size']];
+    for (final v in cands) {
+      if (v == null) continue;
+      final s = v.toString().trim();
+      if (s.isNotEmpty) return s;
+    }
+    return null;
+  }
+
+  /// casa a chave exata do mapa 'tamanhos' do produto com o valor vindo do item
+  String? _resolverChaveTamanhoExistente(
+    Map<String, dynamic> tamanhosProduto,
+    String tamItem,
+  ) {
+    if (tamItem.trim().isEmpty) return null;
+
+    // 1) match exato
+    if (tamanhosProduto.containsKey(tamItem)) return tamItem;
+
+    // 2) case-insensitive
+    final up = tamItem.trim().toUpperCase();
+    for (final k in tamanhosProduto.keys) {
+      if (k.toString().trim().toUpperCase() == up) return k.toString();
+    }
+
+    // 3) fuzzy (sem acentos/espaços)
+    final alvo = _normKey(tamItem);
+    for (final k in tamanhosProduto.keys) {
+      if (_normKey(k.toString()) == alvo) return k.toString();
+    }
+
+    return null; // não achou
+  }
+
+  Future<String?> _descobrirProdutoIdViaConsulta(
+    Map<String, dynamic> item,
+  ) async {
+    // 1) tenta por código de barras
+    final cods = <dynamic>[
+      item['codigoBarras'],
+      item['codigo'],
+      item['barcode'],
+    ].where((e) => e != null && e.toString().trim().isNotEmpty).toList();
+
+    if (cods.isNotEmpty) {
+      final cod = cods.first.toString().trim();
+      final qs = await FirebaseFirestore.instance
+          .collection('produtos')
+          .where('codigoBarras', isEqualTo: cod)
+          .limit(1)
+          .get();
+      if (qs.docs.isNotEmpty) return qs.docs.first.id;
+    }
+
+    // 2) tenta por nome (+ cor/loja se disponíveis, para diminuir ambiguidades)
+    final nome = (item['produtoNome'] ?? item['nome'] ?? '').toString().trim();
+    if (nome.isNotEmpty) {
+      Query q = FirebaseFirestore.instance
+          .collection('produtos')
+          .where('nome', isEqualTo: nome.toUpperCase());
+
+      final cor = (item['cor'] ?? '').toString().trim();
+      final loja = (item['loja'] ?? '').toString().trim();
+
+      if (cor.isNotEmpty) q = q.where('cor', isEqualTo: cor);
+      if (loja.isNotEmpty) q = q.where('loja', isEqualTo: loja);
+
+      final qs = await q.limit(1).get();
+      if (qs.docs.isNotEmpty) return qs.docs.first.id;
+    }
+
+    return null; // não encontrado
+  }
+
+  Future<void> _cancelarVenda(
+    String vendaId,
+    Map<String, dynamic> venda,
+    String? motivo,
+  ) async {
+    try {
+      if (venda['cancelada'] == true ||
+          (venda['status'] ?? '') == 'cancelada') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Esta venda já está cancelada.')),
+        );
+        return;
+      }
+
+      final itens = List<Map<String, dynamic>>.from(venda['itens'] ?? const []);
+      if (itens.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Venda sem itens — nada a repor.')),
+        );
+        return;
+      }
+
+      // Vamos acumular os increments por produto e por tamanho
+      final updatesPorProduto = <String, Map<String, dynamic>>{};
+      // { produtoId: { 'qtdTotal': int, 'porTamanho': { 'PP': int, ... } } }
+
+      for (final item in itens) {
+        // 1) quantidade
+        final int qty = _resolveQtd(item['quantidade'] ?? item['qtd']);
+        if (qty <= 0) {
+          debugPrint('[cancelar] Item ignorado: quantidade inválida => $item');
+          continue;
+        }
+
+        // 2) produtoId (várias chaves) ou descobrir via consulta
+        String? produtoId = _resolveProdutoIdBruto(item);
+        if (produtoId == null) {
+          produtoId = await _descobrirProdutoIdViaConsulta(item);
+        }
+        if (produtoId == null) {
+          debugPrint(
+            '[cancelar] NÃO FOI POSSÍVEL ENCONTRAR produtoId p/ item => $item',
+          );
+          continue;
+        }
+
+        // 3) tamanho bruto (se houver)
+        final tamBruto = _resolveTamanhoBruto(item);
+
+        // 4) ler produto para casar a chave de tamanho correta
+        final produtoRef = FirebaseFirestore.instance
+            .collection('produtos')
+            .doc(produtoId);
+        final produtoSnap = await produtoRef.get();
+        if (!produtoSnap.exists) {
+          debugPrint('[cancelar] Produto não existe: $produtoId (item: $item)');
+          continue;
+        }
+        final prod = produtoSnap.data() as Map<String, dynamic>;
+        final tamanhosProduto = Map<String, dynamic>.from(
+          prod['tamanhos'] ?? const {},
+        );
+
+        String? chaveTamanho;
+        if (tamBruto != null && tamBruto.trim().isNotEmpty) {
+          chaveTamanho =
+              _resolverChaveTamanhoExistente(tamanhosProduto, tamBruto)
+              // se não achou no produto, padroniza e cria
+              ??
+              tamBruto.trim().toUpperCase();
+        }
+
+        // 5) acumula increments
+        updatesPorProduto.putIfAbsent(
+          produtoId,
+          () => {'qtdTotal': 0, 'porTamanho': <String, int>{}},
+        );
+
+        updatesPorProduto[produtoId]!['qtdTotal'] =
+            (updatesPorProduto[produtoId]!['qtdTotal'] as int) + qty;
+
+        if (chaveTamanho != null && chaveTamanho.isNotEmpty) {
+          final mapSizes =
+              (updatesPorProduto[produtoId]!['porTamanho'] as Map<String, int>);
+          mapSizes[chaveTamanho] = (mapSizes[chaveTamanho] ?? 0) + qty;
+        }
+      }
+
+      if (updatesPorProduto.isEmpty) {
+        // ➜ Foi aqui que seu código caiu antes
+        // Agora deixamos pistas no log para você ver qual item não tinha produtoId/qtd
+        debugPrint('[cancelar] Nenhum update acumulado. Revise os logs acima.');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nada a repor nesta venda.')),
+        );
+        return;
+      }
+
+      // 6) aplica em batch
+      final batch = FirebaseFirestore.instance.batch();
+
+      updatesPorProduto.forEach((produtoId, payload) {
+        final produtoRef = FirebaseFirestore.instance
+            .collection('produtos')
+            .doc(produtoId);
+
+        final qtdTotal = payload['qtdTotal'] as int;
+        batch.update(produtoRef, {
+          'quantidade': FieldValue.increment(qtdTotal),
+        });
+
+        final porTamanho = payload['porTamanho'] as Map<String, int>;
+        porTamanho.forEach((chave, inc) {
+          batch.update(produtoRef, {
+            'tamanhos.$chave': FieldValue.increment(inc),
+          });
+        });
+
+        // (Opcional) se mantém espelho em "estoque"
+        final estoqueRef = FirebaseFirestore.instance
+            .collection('estoque')
+            .doc(produtoId);
+        batch.set(estoqueRef, {
+          'idProduto': produtoId,
+          'quantidade': FieldValue.increment(qtdTotal),
+          if (porTamanho.isNotEmpty)
+            ...porTamanho.map(
+              (k, v) => MapEntry('tamanhos.$k', FieldValue.increment(v)),
+            ),
+        }, SetOptions(merge: true));
+      });
+
+      // marcar venda como cancelada
+      final vendaRef = FirebaseFirestore.instance
+          .collection('vendas')
+          .doc(vendaId);
+      batch.update(vendaRef, {
+        'cancelada': true,
+        'status': 'cancelada',
+        'canceladaEm': FieldValue.serverTimestamp(),
+        'canceladaPorUid': user?.uid,
+        'canceladaPorNome': nomeUsuario,
+        if (motivo != null && motivo.isNotEmpty) 'motivoCancelamento': motivo,
+      });
+
+      await batch.commit();
+
+      await vendaRef.collection('logs').add({
+        'tipo': 'cancelamento',
+        'quando': FieldValue.serverTimestamp(),
+        'quemUid': user?.uid,
+        'quemNome': nomeUsuario,
+        'motivo': motivo ?? '',
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Venda cancelada e estoque restabelecido.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e, st) {
+      debugPrint('Erro ao cancelar venda: $e\n$st');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erro ao cancelar: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }
 

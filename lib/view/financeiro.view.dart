@@ -1,10 +1,10 @@
 // ignore_for_file: use_build_context_synchronously
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:diacritic/diacritic.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
-import 'package:csv/csv.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
@@ -14,12 +14,10 @@ import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
-import 'package:share_plus/share_plus.dart';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'dart:ui' show FontFeature;
 
 class FinanceiroView extends StatefulWidget {
   const FinanceiroView({super.key});
@@ -46,6 +44,76 @@ class _FinanceiroViewState extends State<FinanceiroView> {
   Map<String, double> vendasPorDia = {};
   Map<String, int> formasPagamento = {};
   Map<String, double> vendasPorCategoria = {};
+  int _touchedIndexCategorias = -1;
+
+  int totalCanceladas = 0;
+  double valorCancelado = 0;
+  List<Map<String, dynamic>> listaCanceladas = []; // p/ PDF/Tabela se quiser
+
+  // NOVOS mapas p/ gráficos:
+  Map<String, double> canceladasPorDia = {}; // R$ por dia (ex.: "12/09": 350.0)
+  Map<String, int> canceladasPorMotivo = {}; // qtd por motivo
+
+  bool _isCancelada(Map<String, dynamic> venda) {
+    final status = (venda['status'] ?? '').toString().toLowerCase().trim();
+    final flag = venda['cancelada'] == true;
+    return flag || status == 'cancelada';
+  }
+
+  // seu array de categorias já existe:
+  final categorias = [
+    'CINTA',
+    'MODELADORES',
+    'PÓS-CIRÚRGICO',
+    'BOLSAS',
+    'CHEIRO PARA AMBIENTE',
+    'CINTAS MODELADORES',
+    'MODA ÍNTIMAS',
+    'MODA PRAIA',
+    'ACESSÓRIOS',
+    'JALECOS',
+    'SUTIÃ MODELADORES',
+    'OUTROS',
+  ];
+
+  // índice normalizado -> nome canônico
+  late final Map<String, String> _catIndex = {
+    for (final c in categorias) _normCat(c): c,
+  };
+
+  String _normCat(String s) => removeDiacritics(s.trim().toUpperCase());
+
+  // converte qualquer entrada para uma categoria canônica da sua lista
+  String _snapCategoria(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return 'OUTROS';
+    final key = _normCat(raw);
+    return _catIndex[key] ?? 'OUTROS';
+  }
+
+  // cache para não ficar consultando o mesmo código toda hora
+  final Map<String, String> _categoriaPorCodigoCache = {};
+
+  // busca categoria do produto por codigoBarras (com cache)
+  Future<String> _categoriaPorCodigo(String codigo) async {
+    final cod = codigo.trim();
+    if (cod.isEmpty) return 'OUTROS';
+    final hit = _categoriaPorCodigoCache[cod];
+    if (hit != null) return hit;
+
+    final qs = await FirebaseFirestore.instance
+        .collection('produtos')
+        .where('codigoBarras', isEqualTo: cod)
+        .limit(1)
+        .get();
+
+    String cat = 'OUTROS';
+    if (qs.docs.isNotEmpty) {
+      final data = qs.docs.first.data();
+      cat = _snapCategoria(data['categoria']?.toString());
+    }
+    _categoriaPorCodigoCache[cod] = cat;
+    return cat;
+  }
 
   @override
   void initState() {
@@ -68,6 +136,16 @@ class _FinanceiroViewState extends State<FinanceiroView> {
   }
 
   Future<void> _exportarPDF() async {
+    // helper local: detecta canceladas com segurança
+    bool _isCancelada(Map<String, dynamic> venda) {
+      final status = (venda['status'] ?? '').toString().toLowerCase().trim();
+      final flag = venda['cancelada'] == true;
+      return flag || status == 'cancelada';
+    }
+
+    String _fmtData(DateTime? dt) =>
+        dt == null ? '-' : DateFormat('dd/MM/yyyy').format(dt);
+
     final agora = DateTime.now();
     final inicioFiltro = dataInicio ?? DateTime(agora.year, agora.month, 1);
     final fimFiltro = (dataFim ?? DateTime.now()).add(
@@ -80,8 +158,68 @@ class _FinanceiroViewState extends State<FinanceiroView> {
         .where('dataVenda', isLessThanOrEqualTo: fimFiltro)
         .get();
 
-    // DEBUG opcional: veja quantas vendas foram encontradas
+    // DEBUG opcional
     print('🔍 Vendas encontradas para o PDF: ${snapshot.docs.length}');
+
+    // Separa ativas e canceladas
+    final vendasAtivasDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    final canceladasDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
+    for (final d in snapshot.docs) {
+      final m = d.data();
+      if (_isCancelada(m)) {
+        canceladasDocs.add(d);
+      } else {
+        vendasAtivasDocs.add(d);
+      }
+    }
+
+    // Monta linhas da tabela principal (somente ativas)
+    final linhasAtivas = vendasAtivasDocs.map((doc) {
+      final data = doc.data();
+      final valor = (data['totalVenda'] ?? 0).toDouble();
+      final ts = data['dataVenda'];
+      final DateTime dataVenda = ts is Timestamp
+          ? ts.toDate()
+          : DateTime.tryParse(ts?.toString() ?? '') ?? agora;
+
+      final formas = (data['formasPagamento'] as List?)?.join(', ') ?? '-';
+      final funcionario = data.containsKey('funcionario')
+          ? (data['funcionario'] ?? '-')
+          : '-';
+
+      return [
+        DateFormat('dd/MM/yyyy').format(dataVenda),
+        'R\$ ${valor.toStringAsFixed(2)}',
+        formas,
+        funcionario,
+      ];
+    }).toList();
+
+    // Monta linhas da seção de canceladas
+    double valorCancelado = 0;
+    final linhasCanceladas = canceladasDocs.map((doc) {
+      final data = doc.data();
+      final valor = (data['totalVenda'] ?? 0).toDouble();
+      valorCancelado += valor;
+
+      final ts = data['dataVenda'];
+      final DateTime? dataVenda = ts is Timestamp
+          ? ts.toDate()
+          : DateTime.tryParse(ts?.toString() ?? '');
+
+      final funcionario = data['funcionario'] ?? '-';
+      final cliente = (data['cliente']?['nome']) ?? '-';
+      final motivo = (data['motivoCancelamento'] ?? '').toString().trim();
+
+      return [
+        _fmtData(dataVenda),
+        'R\$ ${valor.toStringAsFixed(2)}',
+        funcionario.toString(),
+        cliente.toString(),
+        motivo.isEmpty ? '-' : motivo,
+      ];
+    }).toList();
 
     final pdf = pw.Document();
 
@@ -99,9 +237,11 @@ class _FinanceiroViewState extends State<FinanceiroView> {
               'Período: ${DateFormat('dd/MM/yyyy').format(inicioFiltro)} - ${DateFormat('dd/MM/yyyy').format(fimFiltro)}',
             ),
             pw.SizedBox(height: 8),
+            // Observação: estes KPIs vêm do estado atual; se já excluem canceladas,
+            // ótimo. Se não, você pode recalcular aqui usando 'vendasAtivasDocs'.
             pw.Text('Total de Vendas: $totalVendas'),
             pw.Text(
-              'Total de Vendas no Periodo: R\$ ${totalMes.toStringAsFixed(2)}',
+              'Total de Vendas no Período: R\$ ${totalMes.toStringAsFixed(2)}',
             ),
             pw.Text('Total de Hoje: R\$ ${totalHoje.toStringAsFixed(2)}'),
             pw.Text(
@@ -120,23 +260,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
 
             pw.Table.fromTextArray(
               headers: ['Data', 'Valor', 'Formas de Pagamento', 'Funcionário'],
-              data: snapshot.docs.map((doc) {
-                final data = doc.data();
-                final valor = (data['totalVenda'] ?? 0).toDouble();
-                final dataVenda = (data['dataVenda'] as Timestamp).toDate();
-                final formas =
-                    (data['formasPagamento'] as List?)?.join(', ') ?? '-';
-                final funcionario = data.containsKey('funcionario')
-                    ? data['funcionario']
-                    : '-';
-
-                return [
-                  DateFormat('dd/MM/yyyy').format(dataVenda),
-                  'R\$ ${valor.toStringAsFixed(2)}',
-                  formas,
-                  funcionario,
-                ];
-              }).toList(),
+              data: linhasAtivas,
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
               cellAlignment: pw.Alignment.centerLeft,
             ),
@@ -207,6 +331,31 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                   fontWeight: pw.FontWeight.bold,
                 ),
               ),
+
+            // ========= NOVA SEÇÃO: VENDAS CANCELADAS =========
+            if (canceladasDocs.isNotEmpty) ...[
+              pw.SizedBox(height: 24),
+              pw.Divider(),
+              pw.Text(
+                '❌ Vendas Canceladas',
+                style: pw.TextStyle(
+                  fontSize: 18,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 6),
+              pw.Text('Quantidade: ${canceladasDocs.length}'),
+              pw.Text(
+                'Valor Total Cancelado: R\$ ${valorCancelado.toStringAsFixed(2)}',
+              ),
+              pw.SizedBox(height: 8),
+              pw.Table.fromTextArray(
+                headers: ['Data', 'Valor', 'Funcionário', 'Cliente', 'Motivo'],
+                data: linhasCanceladas,
+                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                cellAlignment: pw.Alignment.centerLeft,
+              ),
+            ],
           ];
         },
       ),
@@ -224,52 +373,6 @@ class _FinanceiroViewState extends State<FinanceiroView> {
       (a, b) => a.value > b.value ? a : b,
     );
     return '${entry.key} (R\$ ${entry.value.toStringAsFixed(2)})';
-  }
-
-  Future<void> _exportarCSV() async {
-    final agora = DateTime.now();
-    final inicioFiltro = dataInicio ?? DateTime(agora.year, agora.month, 1);
-    final fimFiltro = dataFim ?? DateTime.now();
-
-    final snapshot = await FirebaseFirestore.instance
-        .collection('vendas')
-        .where('dataVenda', isGreaterThanOrEqualTo: inicioFiltro)
-        .where('dataVenda', isLessThanOrEqualTo: fimFiltro)
-        .get();
-
-    List<List<dynamic>> rows = [
-      ['Data', 'Valor', 'Formas Pagamento', 'Funcionário'],
-    ];
-
-    for (var doc in snapshot.docs) {
-      final data = (doc['dataVenda'] as Timestamp).toDate();
-      final valor = (doc['totalVenda'] ?? 0).toDouble();
-      final formas = (doc['formasPagamento'] as List).join(', ');
-      final funcionario = doc['funcionario'] ?? '';
-
-      rows.add([
-        DateFormat('dd/MM/yyyy').format(data),
-        valor.toStringAsFixed(2),
-        formas,
-        funcionario,
-      ]);
-
-      final itens = doc['itens'] as List<dynamic>? ?? [];
-      for (var item in itens) {
-        final valorReal = (item['valorReal'] ?? 0).toDouble();
-        final quantidade = (item['quantidade'] ?? 1).toInt();
-        valorGastoTotal += valorReal * quantidade;
-      }
-    }
-
-    String csvData = const ListToCsvConverter().convert(rows);
-
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/relatorio_vendas.csv');
-
-    await file.writeAsString(csvData);
-
-    await Share.shareXFiles([XFile(file.path)], text: 'Relatório de Vendas');
   }
 
   Future<void> _selecionarIntervaloDatas() async {
@@ -293,6 +396,27 @@ class _FinanceiroViewState extends State<FinanceiroView> {
   }
 
   Future<void> carregarEstatisticas() async {
+    // --- helper local para normalizar e casar com sua lista 'categorias' ---
+    String _snapCategoriaLocal(String? raw) {
+      if (raw == null) return 'OUTROS';
+      final s = raw.toString().trim().toUpperCase();
+      // tenta match case-insensitive com a lista canônica
+      for (final c in categorias) {
+        if (c.trim().toUpperCase() == s) return c; // retorna o nome canônico
+      }
+      return 'OUTROS';
+    }
+
+    double _toDouble(dynamic v) {
+      if (v is int) return v.toDouble();
+      if (v is double) return v;
+      if (v == null) return 0.0;
+      final s = v.toString().replaceAll(',', '.').trim();
+      return double.tryParse(s) ?? 0.0;
+    }
+
+    // -----------------------------------------------------------------------
+
     valorGastoTotal = 0; // Reset para não acumular
 
     final agora = DateTime.now();
@@ -312,61 +436,150 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     double somaMes = 0;
     int vendasTotal = 0;
 
-    Map<String, double> tempVendasPorDia = {};
-    Map<String, int> tempFormasPagamento = {};
-    Map<String, double> tempVendasPorFuncionario = {};
-    Map<String, double> tempVendasPorCategoria =
-        {}; // Declarar aqui fora, uma única vez
+    final Map<String, double> tempVendasPorDia = {};
+    final Map<String, int> tempFormasPagamento = {};
+    final Map<String, double> tempVendasPorFuncionario = {};
+    final Map<String, double> tempVendasPorCategoria = {};
+
+    // gráficos/contadores de canceladas
+    final Map<String, double> tempCanceladasPorDia = {};
+    final Map<String, int> tempCanceladasPorMotivo = {};
+    totalCanceladas = 0;
+    valorCancelado = 0;
+    listaCanceladas = [];
+
+    // pendências de categoria a resolver por codigoBarras (somadas por código)
+    final Map<String, double> pendentesPorCodigo = {}; // codigo -> soma R$
 
     for (var doc in snapshot.docs) {
-      final data = (doc['dataVenda'] as Timestamp).toDate();
-      final valor = (doc['totalVenda'] ?? 0).toDouble();
       final dataDoc = doc.data();
-      final funcionario = dataDoc.containsKey('funcionario')
-          ? dataDoc['funcionario'] ?? 'Desconhecido'
+
+      // ======= CANCELADAS (saem da contabilidade normal) =======
+      if (_isCancelada(dataDoc)) {
+        totalCanceladas++;
+        final valorCanc = _toDouble(dataDoc['totalVenda']);
+        valorCancelado += valorCanc;
+
+        final dt = (dataDoc['dataVenda'] as Timestamp?)?.toDate();
+        final diaStr = dt != null ? DateFormat('dd/MM').format(dt) : '-';
+        tempCanceladasPorDia[diaStr] =
+            (tempCanceladasPorDia[diaStr] ?? 0) + valorCanc;
+
+        final motivo = (dataDoc['motivoCancelamento'] ?? '').toString().trim();
+        final motivoKey = motivo.isEmpty ? 'Sem motivo' : motivo;
+        tempCanceladasPorMotivo[motivoKey] =
+            (tempCanceladasPorMotivo[motivoKey] ?? 0) + 1;
+
+        listaCanceladas.add({
+          'dataVenda': dt,
+          'totalVenda': valorCanc,
+          'formasPagamento': (dataDoc['formasPagamento'] as List?) ?? const [],
+          'funcionario': dataDoc['funcionario'] ?? '-',
+          'cliente': dataDoc['cliente']?['nome'] ?? '-',
+          'motivo': motivo,
+        });
+        continue;
+      }
+
+      // ======= A PARTIR DAQUI, SÓ VENDAS ATIVAS =======
+      final DateTime data = (dataDoc['dataVenda'] as Timestamp).toDate();
+      final double valor = _toDouble(dataDoc['totalVenda']);
+      final String funcionario = dataDoc.containsKey('funcionario')
+          ? (dataDoc['funcionario'] ?? 'Desconhecido')
           : 'Desconhecido';
 
-      // Acumula por dia
       final diaStr = DateFormat('dd/MM').format(data);
       tempVendasPorDia[diaStr] = (tempVendasPorDia[diaStr] ?? 0) + valor;
 
-      // Acumula formas de pagamento
-      final formas = (doc['formasPagamento'] as List<dynamic>?) ?? [];
+      final formas = (dataDoc['formasPagamento'] as List<dynamic>?) ?? [];
       for (var forma in formas) {
-        tempFormasPagamento[forma] = (tempFormasPagamento[forma] ?? 0) + 1;
+        final f = (forma ?? '').toString();
+        if (f.isEmpty) continue;
+        tempFormasPagamento[f] = (tempFormasPagamento[f] ?? 0) + 1;
       }
 
-      // Acumula por funcionário
       tempVendasPorFuncionario[funcionario] =
           (tempVendasPorFuncionario[funcionario] ?? 0) + valor;
 
-      // Acumula totais
-      if (_mesmoDia(data, agora)) {
-        somaHoje += valor;
-      }
-
+      if (_mesmoDia(data, agora)) somaHoje += valor;
       somaMes += valor;
       vendasTotal++;
 
-      // Calcular valor gasto (valorReal * quantidade)
-      final itens = doc['itens'] as List<dynamic>? ?? [];
+      // custo (valorReal * quantidade)
+      final itens = dataDoc['itens'] as List<dynamic>? ?? [];
       for (var item in itens) {
-        final valorReal = (item['valorReal'] ?? 0).toDouble();
-        final quantidade = (item['quantidade'] ?? 1).toInt();
-        valorGastoTotal += valorReal * quantidade;
+        final vReal = _toDouble(item['valorReal']);
+        final qtd = (item['quantidade'] ?? 1).toInt();
+        valorGastoTotal += vReal * qtd;
       }
 
-      // **Acumula as vendas por categoria dentro do mesmo mapa externo**
+      // ======= VENDAS POR CATEGORIA =======
       for (var item in itens) {
-        final categoria = item['categoria'] ?? 'Outros';
-
-        // Atenção: use 'precoFinal', pois é o campo que você está salvando no item da venda
-        final valorVenda = (item['precoFinal'] ?? 0).toDouble();
+        final valorVenda = _toDouble(item['precoFinal']);
         final quantidade = (item['quantidade'] ?? 1).toInt();
         final total = valorVenda * quantidade;
 
-        tempVendasPorCategoria[categoria] =
-            (tempVendasPorCategoria[categoria] ?? 0) + total;
+        // 1) tenta a categoria do item (normalizada para sua lista)
+        String categoria = _snapCategoriaLocal(item['categoria']?.toString());
+
+        if (categoria != 'OUTROS') {
+          // categoria válida no item: soma direto
+          tempVendasPorCategoria[categoria] =
+              (tempVendasPorCategoria[categoria] ?? 0) + total;
+        } else {
+          // 2) ficou OUTROS -> tentar resolver por codigoBarras depois (em lote)
+          final codigo =
+              (item['codigoBarras'] ?? item['codigo'] ?? item['barcode'] ?? '')
+                  .toString()
+                  .trim();
+
+          if (codigo.isNotEmpty) {
+            pendentesPorCodigo[codigo] =
+                (pendentesPorCodigo[codigo] ?? 0) + total;
+          } else {
+            // sem código e sem categoria válida => OUTROS
+            tempVendasPorCategoria['OUTROS'] =
+                (tempVendasPorCategoria['OUTROS'] ?? 0) + total;
+          }
+        }
+      }
+    }
+
+    // ======= Resolver categorias por codigoBarras em LOTE (whereIn até 10) =======
+    if (pendentesPorCodigo.isNotEmpty) {
+      final codes = pendentesPorCodigo.keys.toList();
+      final Set<String> resolvidos = {};
+
+      for (var i = 0; i < codes.length; i += 10) {
+        final chunk = codes.skip(i).take(10).toList();
+
+        final qs = await FirebaseFirestore.instance
+            .collection('produtos')
+            .where('codigoBarras', whereIn: chunk)
+            .get();
+
+        for (final d in qs.docs) {
+          final data = d.data();
+          final cod = (data['codigoBarras'] ?? '').toString().trim();
+          if (cod.isEmpty) continue;
+
+          final cat = _snapCategoriaLocal(data['categoria']?.toString());
+          final soma = pendentesPorCodigo[cod] ?? 0.0;
+
+          tempVendasPorCategoria[cat] =
+              (tempVendasPorCategoria[cat] ?? 0) + soma;
+
+          resolvidos.add(cod);
+        }
+      }
+
+      // códigos não encontrados em 'produtos' => caem em OUTROS
+      for (final cod in codes) {
+        if (!resolvidos.contains(cod)) {
+          final soma = pendentesPorCodigo[cod] ?? 0.0;
+          tempVendasPorCategoria['OUTROS'] =
+              (tempVendasPorCategoria['OUTROS'] ?? 0) + soma;
+        }
       }
     }
 
@@ -381,6 +594,10 @@ class _FinanceiroViewState extends State<FinanceiroView> {
       vendasPorFuncionario = Map.from(tempVendasPorFuncionario);
       lucro = lucroCalculado;
       vendasPorCategoria = Map.from(tempVendasPorCategoria);
+
+      // gráficos/contadores de canceladas
+      canceladasPorDia = Map.from(tempCanceladasPorDia);
+      canceladasPorMotivo = Map.from(tempCanceladasPorMotivo);
     });
   }
 
@@ -549,17 +766,6 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                     ),
                   ),
                   ElevatedButton.icon(
-                    onPressed: _exportarCSV,
-                    icon: const Icon(Icons.file_download),
-                    label: const Text(
-                      "Exportar CSV",
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryColor,
-                    ),
-                  ),
-                  ElevatedButton.icon(
                     onPressed: _exportarPDF,
                     icon: const Icon(Icons.picture_as_pdf),
                     label: const Text(
@@ -656,6 +862,48 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                   child: _buildPieChartCategorias(),
                 ),
               ),
+              // ❌ Canceladas por Dia (R$)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  "❌ Canceladas por Dia (R\$)",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    height: 260,
+                    child: _BarChartCanceladas(data: canceladasPorDia),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // 📝 Motivos de Cancelamento (Qtd)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  "📝 Motivos de Cancelamento (Qtd)",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _buildPieChartCanceladasMotivos(),
+                ),
+              ),
             ],
           ),
         ),
@@ -667,11 +915,30 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        _buildKpiCard("Hoje", totalHoje, Colors.green),
-        _buildKpiCard("Mês", totalMes, Colors.blue),
-        _buildKpiCard("Valor Gasto", valorGastoTotal, Colors.orange),
-        _buildKpiCard("Lucro", lucro, const Color.fromARGB(255, 51, 143, 159)),
-        _buildKpiCard("Vendas", totalVendas.toDouble(), Colors.purple),
+        _buildKpiCard("Hoje", totalHoje, Colors.green), // dinheiro (padrão)
+        _buildKpiCard("Mês", totalMes, Colors.blue), // dinheiro
+        _buildKpiCard(
+          "Valor Gasto",
+          valorGastoTotal,
+          Colors.orange,
+        ), // dinheiro
+        _buildKpiCard(
+          "Lucro",
+          lucro,
+          const Color.fromARGB(255, 51, 143, 159),
+        ), // dinheiro
+        _buildKpiCard(
+          "Vendas",
+          totalVendas,
+          Colors.purple,
+          isMoney: false,
+        ), // inteiro
+        _buildKpiCard(
+          "Canceladas",
+          totalCanceladas,
+          Colors.red,
+          isMoney: false,
+        ), // inteiro
       ],
     );
   }
@@ -681,46 +948,167 @@ class _FinanceiroViewState extends State<FinanceiroView> {
       return const Center(child: Text("Sem dados suficientes"));
     }
 
-    return SizedBox(
-      height: 220,
-      child: PieChart(
-        PieChartData(
-          sections: vendasPorCategoria.entries.map((e) {
-            final color = _getColorForCategory(e.key);
-            return PieChartSectionData(
-              value: e.value,
-              color: color,
-              title: '${e.key} \nR\$ ${e.value.toStringAsFixed(0)}',
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 11, color: Colors.white),
-            );
-          }).toList(),
+    // 1) ordena e agrupa “resto” em OUTRAS
+    const int maxSlices = 6; // 5 maiores + OUTRAS
+    final entries = vendasPorCategoria.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final List<MapEntry<String, double>> mainSlices = entries
+        .take(maxSlices - 1)
+        .toList();
+    final double othersTotal = entries
+        .skip(maxSlices - 1)
+        .fold(0.0, (sum, e) => sum + e.value);
+
+    final List<MapEntry<String, double>> toPlot = [
+      ...mainSlices,
+      if (othersTotal > 0) const MapEntry('OUTRAS', 0), // placeholder
+    ];
+    if (othersTotal > 0) {
+      toPlot[toPlot.length - 1] = MapEntry('OUTRAS', othersTotal);
+    }
+
+    final double total = toPlot.fold(0.0, (s, e) => s + e.value);
+    if (total <= 0) {
+      return const Center(child: Text("Sem dados suficientes"));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 260,
+          child: PieChart(
+            PieChartData(
+              startDegreeOffset: -90,
+              sectionsSpace: 2, // espaço entre fatias
+              centerSpaceRadius: 52, // deixa “donut”
+              pieTouchData: PieTouchData(
+                touchCallback: (event, resp) {
+                  setState(() {
+                    _touchedIndexCategorias =
+                        resp?.touchedSection?.touchedSectionIndex ?? -1;
+                  });
+                },
+              ),
+              sections: List.generate(toPlot.length, (i) {
+                final e = toPlot[i];
+                final pct = e.value / total;
+                final bool isTouched = i == _touchedIndexCategorias;
+                final bool showTitle =
+                    pct >= 0.06 || isTouched; // >=6% ou tocado
+                final String title = showTitle
+                    ? '${e.key}\n${_brl.format(e.value)}\n${(pct * 100).toStringAsFixed(0)}%'
+                    : '';
+
+                return PieChartSectionData(
+                  value: e.value,
+                  color: _getColorForCategory(e.key),
+                  title: title,
+                  radius: isTouched ? 74 : 64, // destaque ao toque
+                  titleStyle: const TextStyle(
+                    fontSize: 11,
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  // empurra o texto para fora do centro (melhora legibilidade)
+                  titlePositionPercentageOffset: 0.6,
+                );
+              }),
+            ),
+          ),
         ),
-      ),
+        const SizedBox(height: 8),
+        _buildLegendCategorias(toPlot, total),
+      ],
     );
   }
 
   Color _getColorForCategory(String categoria) {
-    final cores = [
-      Colors.pink,
-      Colors.teal,
-      Colors.deepPurple,
-      Colors.amber,
-      Colors.indigo,
-      Colors.brown,
-      Colors.cyan,
-      Colors.lime,
+    const palette = [
+      Color(0xFFF59E0B), // amber
+      Color(0xFF3B82F6), // blue
+      Color(0xFF10B981), // emerald
+      Color(0xFF8B5CF6), // violet
+      Color(0xFFEF4444), // red
+      Color(0xFF14B8A6), // teal
+      Color(0xFF6366F1), // indigo
+      Color(0xFFF97316), // orange
+      Color(0xFF06B6D4), // cyan
+      Color(0xFFA78BFA), // purple
     ];
-    return cores[categoria.hashCode % cores.length];
+    // mantém estabilidade por hash
+    return palette[(categoria.hashCode & 0x7fffffff) % palette.length];
   }
 
-  Widget _buildKpiCard(String title, double value, Color color) {
+  final NumberFormat _brl = NumberFormat.currency(
+    locale: 'pt_BR',
+    symbol: 'R\$',
+  );
+  final NumberFormat _brlCompact = NumberFormat.compactCurrency(
+    locale: 'pt_BR',
+    symbol: 'R\$',
+  );
+
+  Widget _buildKpiCard(
+    String title,
+    num value,
+    Color color, {
+    bool isMoney = true,
+    bool compact = false, // use true se quiser "R$ 27,7 mil"
+    bool fancy = false, // deixa símbolo e centavos menores
+  }) {
+    String display = isMoney
+        ? (compact ? _brlCompact.format(value) : _brl.format(value))
+        : value.toInt().toString();
+
+    // NBSP -> espaço normal (evita quebra estranha em web)
+    display = display.replaceAll('\u00A0', ' ');
+
+    final baseStyle = const TextStyle(
+      fontSize: 16,
+      fontWeight: FontWeight.bold,
+      fontFeatures: [FontFeature.tabularFigures()], // dígitos alinhados
+    );
+
+    Widget valueWidget;
+    if (isMoney && fancy && !compact) {
+      // Deixa "R$" e centavos menores
+      // Ex.: "R$ 27.759,50" -> "R$ " | "27.759" | ",50"
+      final parts = display.split(',');
+      final left = parts[0]; // "R$ 27.759"
+      final cents = parts.length > 1 ? ',${parts[1]}' : '';
+
+      valueWidget = RichText(
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: left.startsWith('R') ? 'R\$ ' : '',
+              style: baseStyle.copyWith(fontSize: 12, color: Colors.black),
+            ),
+            TextSpan(
+              text: left.replaceFirst('R ', ''),
+              style: baseStyle.copyWith(fontSize: 18, color: Colors.black),
+            ),
+            if (cents.isNotEmpty)
+              TextSpan(
+                text: cents,
+                style: baseStyle.copyWith(fontSize: 12, color: Colors.black87),
+              ),
+          ],
+        ),
+      );
+    } else {
+      valueWidget = Text(display, style: baseStyle);
+    }
+
     return Expanded(
       child: Card(
+        color: const Color(0xFFFFF4F4), // leve rosado; ajuste por KPI
         elevation: 3,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: const EdgeInsets.symmetric(vertical: 14),
           child: Column(
             children: [
               Text(
@@ -728,15 +1116,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                 style: TextStyle(fontWeight: FontWeight.bold, color: color),
               ),
               const SizedBox(height: 8),
-              Text(
-                title == "Vendas"
-                    ? value.toInt().toString()
-                    : "R\$ ${value.toStringAsFixed(2)}",
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              valueWidget,
             ],
           ),
         ),
@@ -780,6 +1160,149 @@ class _FinanceiroViewState extends State<FinanceiroView> {
       default:
         return Colors.grey;
     }
+  }
+
+  Widget _buildPieChartCanceladasMotivos() {
+    if (canceladasPorMotivo.isEmpty) {
+      return const Center(child: Text("Sem dados suficientes"));
+    }
+
+    return SizedBox(
+      height: 220,
+      child: PieChart(
+        PieChartData(
+          sections: canceladasPorMotivo.entries.map((e) {
+            // Reaproveita sua paleta:
+            final color = _getColorForCategory(e.key);
+            return PieChartSectionData(
+              value: e.value.toDouble(),
+              color: color,
+              title: '${e.key}\n(${e.value})',
+              radius: 60,
+              titleStyle: const TextStyle(fontSize: 11, color: Colors.white),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLegendCategorias(
+    List<MapEntry<String, double>> data,
+    double total,
+  ) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: data.map((e) {
+        final pct = (e.value / total) * 100;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: _getColorForCategory(e.key),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '${e.key}: ${_brl.format(e.value)} (${pct.toStringAsFixed(0)}%)',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _BarChartCanceladas extends StatelessWidget {
+  final Map<String, double> data;
+  const _BarChartCanceladas({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    if (data.isEmpty) {
+      return const Center(child: Text('Sem dados para mostrar'));
+    }
+
+    final dias = data.keys.toList();
+    final valores = data.values.toList();
+    final maxValor = valores.reduce((a, b) => a > b ? a : b);
+    final maxY = (maxValor * 1.2).ceilToDouble();
+
+    return BarChart(
+      BarChartData(
+        alignment: BarChartAlignment.spaceBetween,
+        maxY: maxY,
+        minY: 0,
+        barGroups: List.generate(dias.length, (i) {
+          return BarChartGroupData(
+            x: i,
+            barRods: [
+              BarChartRodData(
+                toY: valores[i],
+                color: Colors.redAccent,
+                width: 12,
+                borderRadius: BorderRadius.circular(6),
+                backDrawRodData: BackgroundBarChartRodData(
+                  show: true,
+                  toY: maxY,
+                  color: Colors.grey[200]!,
+                ),
+              ),
+            ],
+          );
+        }),
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          horizontalInterval: maxY / 5,
+          getDrawingHorizontalLine: (value) =>
+              FlLine(color: Colors.grey[300]!, strokeWidth: 1),
+        ),
+        titlesData: FlTitlesData(
+          show: true,
+          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 28,
+              getTitlesWidget: (value, meta) {
+                final i = value.toInt();
+                if (i < 0 || i >= dias.length) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(dias[i], style: const TextStyle(fontSize: 11)),
+                );
+              },
+            ),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 48,
+              interval: maxY / 5,
+              getTitlesWidget: (value, meta) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text(
+                    'R\$ ${value.toInt()}',
+                    style: const TextStyle(fontSize: 10),
+                    textAlign: TextAlign.right,
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+      ),
+    );
   }
 }
 
