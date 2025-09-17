@@ -45,6 +45,38 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
   List<String> usuarios = []; // preenchido do Firestore
   List<String> formasPagamento = ['Dinheiro', 'Pix', 'Crédito', 'Débito'];
 
+  String _normKey(String s) =>
+      removeDiacritics(s.trim().toUpperCase()).replaceAll(RegExp(r'\s+'), '');
+
+  String _sanitizeField(String s) =>
+      s.replaceAll(RegExp(r'[./\[\]*]'), '_').trim();
+
+  String? _resolveCorBruto(Map<String, dynamic> item) {
+    final cands = <dynamic>[item['cor'], item['color'], item['corSelecionada']];
+    for (final v in cands) {
+      if (v == null) continue;
+      final s = v.toString().trim();
+      if (s.isNotEmpty) return s;
+    }
+    return null;
+  }
+
+  String? _resolverChaveNormalizada(Map<String, dynamic> mapa, String valor) {
+    // tenta match exato
+    if (mapa.containsKey(valor)) return valor;
+    // case-insensitive
+    final up = valor.trim().toUpperCase();
+    for (final k in mapa.keys) {
+      if (k.toString().trim().toUpperCase() == up) return k.toString();
+    }
+    // fuzzy (sem acentos/espaços)
+    final alvo = _normKey(valor);
+    for (final k in mapa.keys) {
+      if (_normKey(k.toString()) == alvo) return k.toString();
+    }
+    return null;
+  }
+
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
       final doc = await FirebaseFirestore.instance
@@ -118,7 +150,8 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
                     children: [
                       Text(
                         '${item['produtoNome'] ?? 'Produto'}'
-                        ' ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}',
+                        ' ${item['tamanho']?.toString().isNotEmpty == true ? '(${item['tamanho']})' : ''}'
+                        '${(item['cor'] ?? '').toString().isNotEmpty ? ' - Cor: ${item['cor']}' : ''}',
                       ),
                       Text(
                         'Quantidade: $quantidade | Unitário: R\$ ${precoFinal.toStringAsFixed(2)}'
@@ -1137,9 +1170,6 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
     }
   }
 
-  String _normKey(String s) =>
-      removeDiacritics(s.trim().toUpperCase()).replaceAll(RegExp(r'\s+'), '');
-
   String? _resolveProdutoIdBruto(Map<String, dynamic> item) {
     // tenta várias formas comuns de vir o id do produto no item
     final cands = <dynamic>[
@@ -1262,83 +1292,117 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
         return;
       }
 
-      // Vamos acumular os increments por produto e por tamanho
+      /// Acúmulo:
+      /// { produtoId: {
+      ///     'qtdTotal': int,
+      ///     'porTamanho': { 'M': 2, 'G': 1 },                  // compat
+      ///     'porGrade': { 'M': { 'PRETO': 1 }, 'G': {'AZUL':1} } // novo
+      ///   }
+      /// }
       final updatesPorProduto = <String, Map<String, dynamic>>{};
-      // { produtoId: { 'qtdTotal': int, 'porTamanho': { 'PP': int, ... } } }
 
       for (final item in itens) {
-        // 1) quantidade
+        // quantidade
         final int qty = _resolveQtd(item['quantidade'] ?? item['qtd']);
-        if (qty <= 0) {
-          debugPrint('[cancelar] Item ignorado: quantidade inválida => $item');
-          continue;
-        }
+        if (qty <= 0) continue;
 
-        // 2) produtoId (várias chaves) ou descobrir via consulta
+        // produtoId (várias chaves) ou descobre por consulta
         String? produtoId = _resolveProdutoIdBruto(item);
-        if (produtoId == null) {
-          produtoId = await _descobrirProdutoIdViaConsulta(item);
-        }
-        if (produtoId == null) {
-          debugPrint(
-            '[cancelar] NÃO FOI POSSÍVEL ENCONTRAR produtoId p/ item => $item',
-          );
-          continue;
-        }
+        produtoId ??= await _descobrirProdutoIdViaConsulta(item);
+        if (produtoId == null) continue;
 
-        // 3) tamanho bruto (se houver)
+        // tamanho/cor do item
         final tamBruto = _resolveTamanhoBruto(item);
+        final corBruta = _resolveCorBruto(item);
 
-        // 4) ler produto para casar a chave de tamanho correta
+        // lê o produto p/ casar chaves reais
         final produtoRef = FirebaseFirestore.instance
             .collection('produtos')
             .doc(produtoId);
         final produtoSnap = await produtoRef.get();
-        if (!produtoSnap.exists) {
-          debugPrint('[cancelar] Produto não existe: $produtoId (item: $item)');
-          continue;
-        }
+        if (!produtoSnap.exists) continue;
+
         final prod = produtoSnap.data() as Map<String, dynamic>;
         final tamanhosProduto = Map<String, dynamic>.from(
-          prod['tamanhos'] ?? const {},
+          prod['tamanhos'] ?? {},
         );
+        final gradeProduto = Map<String, dynamic>.from(
+          prod['grade'] ?? {},
+        ); // << novo
 
-        String? chaveTamanho;
+        // resolve chaves (se não existir no produto, cria com o valor normalizado)
+        String? tamKey;
         if (tamBruto != null && tamBruto.trim().isNotEmpty) {
-          chaveTamanho =
-              _resolverChaveTamanhoExistente(tamanhosProduto, tamBruto)
-              // se não achou no produto, padroniza e cria
-              ??
+          tamKey =
+              _resolverChaveNormalizada(
+                gradeProduto.isNotEmpty ? gradeProduto : tamanhosProduto,
+                tamBruto,
+              ) ??
               tamBruto.trim().toUpperCase();
         }
 
-        // 5) acumula increments
+        String? corKey;
+        if (corBruta != null && corBruta.trim().isNotEmpty) {
+          // tenta resolver dentro do mapa de cores daquele tamanho, se existir
+          if (gradeProduto.isNotEmpty &&
+              tamKey != null &&
+              gradeProduto[tamKey] is Map) {
+            final coresDoTam = Map<String, dynamic>.from(gradeProduto[tamKey]);
+            corKey =
+                _resolverChaveNormalizada(coresDoTam, corBruta) ??
+                corBruta.trim().toUpperCase();
+          } else {
+            corKey = corBruta.trim().toUpperCase();
+          }
+        }
+
+        // acumula
         updatesPorProduto.putIfAbsent(
           produtoId,
-          () => {'qtdTotal': 0, 'porTamanho': <String, int>{}},
+          () => {
+            'qtdTotal': 0,
+            'porTamanho': <String, int>{},
+            'porGrade': <String, Map<String, int>>{},
+          },
         );
 
         updatesPorProduto[produtoId]!['qtdTotal'] =
             (updatesPorProduto[produtoId]!['qtdTotal'] as int) + qty;
 
-        if (chaveTamanho != null && chaveTamanho.isNotEmpty) {
-          final mapSizes =
-              (updatesPorProduto[produtoId]!['porTamanho'] as Map<String, int>);
-          mapSizes[chaveTamanho] = (mapSizes[chaveTamanho] ?? 0) + qty;
+        // se vier tamanho+cor => usa grade (novo)
+        if (tamKey != null &&
+            corKey != null &&
+            tamKey.isNotEmpty &&
+            corKey.isNotEmpty) {
+          final porGrade =
+              updatesPorProduto[produtoId]!['porGrade']
+                  as Map<String, Map<String, int>>;
+          porGrade.putIfAbsent(tamKey, () => <String, int>{});
+          porGrade[tamKey]![corKey] = (porGrade[tamKey]![corKey] ?? 0) + qty;
         }
+        // se vier só tamanho => mantém compat com 'tamanhos'
+        else if (tamKey != null && tamKey.isNotEmpty) {
+          final porTam =
+              updatesPorProduto[produtoId]!['porTamanho'] as Map<String, int>;
+          porTam[tamKey] = (porTam[tamKey] ?? 0) + qty;
+        }
+        // se não veio nada, apenas soma na quantidade total
       }
 
       if (updatesPorProduto.isEmpty) {
-        // ➜ Foi aqui que seu código caiu antes
-        // Agora deixamos pistas no log para você ver qual item não tinha produtoId/qtd
-        debugPrint('[cancelar] Nenhum update acumulado. Revise os logs acima.');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Nada a repor nesta venda.')),
         );
         return;
       }
+      // --- A PARTIR DAQUI: APLICA EM BATCH COM SET+MERGE, CRIANDO OS MAPAS ---
 
-      // 6) aplica em batch
+      String _sanitizeField(String s) => s
+          .replaceAll(RegExp(r'[./\[\]*]'), '_')
+          .trim(); // evita chars proibidos
+
+      // --- aplica em batch, devolvendo em tamanhosCores (e tamanhos opcional) ---
+
       final batch = FirebaseFirestore.instance.batch();
 
       updatesPorProduto.forEach((produtoId, payload) {
@@ -1346,33 +1410,72 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
             .collection('produtos')
             .doc(produtoId);
 
-        final qtdTotal = payload['qtdTotal'] as int;
+        final int qtdTotal = payload['qtdTotal'] as int;
+
+        // total sempre volta
         batch.update(produtoRef, {
           'quantidade': FieldValue.increment(qtdTotal),
         });
 
+        // 1) compat (se você ainda usa): tamanhos.<tam> += inc
         final porTamanho = payload['porTamanho'] as Map<String, int>;
-        porTamanho.forEach((chave, inc) {
-          batch.update(produtoRef, {
-            'tamanhos.$chave': FieldValue.increment(inc),
+        porTamanho.forEach((tamOrig, inc) {
+          final tam = _sanitizeField(tamOrig);
+          batch.set(produtoRef, {
+            'tamanhos': {tam: FieldValue.increment(inc)},
+          }, SetOptions(merge: true));
+        });
+
+        // 2) **NOVO OFICIAL**: tamanhosCores.<tam>.<cor> += inc
+        //    (no seu código anterior a variável chamava "porGrade"; reaproveite)
+        final Map<String, Map<String, int>> porTamCor =
+            (payload['porGrade']
+                as Map<
+                  String,
+                  Map<String, int>
+                >); // <- mantém o nome antigo se já existir
+
+        porTamCor.forEach((tamOrig, cores) {
+          final tam = _sanitizeField(tamOrig);
+          cores.forEach((corOrig, inc) {
+            final cor = _sanitizeField(corOrig);
+            batch.set(
+              produtoRef,
+              {
+                'tamanhosCores': {
+                  tam: {cor: FieldValue.increment(inc)},
+                },
+              },
+              SetOptions(merge: true), // cria os pais se não existirem
+            );
           });
         });
 
-        // (Opcional) se mantém espelho em "estoque"
+        // (opcional) espelho em "estoque"
         final estoqueRef = FirebaseFirestore.instance
             .collection('estoque')
             .doc(produtoId);
-        batch.set(estoqueRef, {
+        final estoqueMerge = <String, dynamic>{
           'idProduto': produtoId,
           'quantidade': FieldValue.increment(qtdTotal),
-          if (porTamanho.isNotEmpty)
-            ...porTamanho.map(
-              (k, v) => MapEntry('tamanhos.$k', FieldValue.increment(v)),
-            ),
-        }, SetOptions(merge: true));
+        };
+
+        porTamanho.forEach((tamOrig, inc) {
+          final tam = _sanitizeField(tamOrig);
+          estoqueMerge['tamanhos.$tam'] = FieldValue.increment(inc);
+        });
+        porTamCor.forEach((tamOrig, cores) {
+          final tam = _sanitizeField(tamOrig);
+          cores.forEach((corOrig, inc) {
+            final cor = _sanitizeField(corOrig);
+            estoqueMerge['tamanhosCores.$tam.$cor'] = FieldValue.increment(inc);
+          });
+        });
+
+        batch.set(estoqueRef, estoqueMerge, SetOptions(merge: true));
       });
 
-      // marcar venda como cancelada
+      // marca venda como cancelada
       final vendaRef = FirebaseFirestore.instance
           .collection('vendas')
           .doc(vendaId);
@@ -1386,7 +1489,6 @@ class _HistoricoVendasViewState extends State<HistoricoVendasView> {
       });
 
       await batch.commit();
-
       await vendaRef.collection('logs').add({
         'tipo': 'cancelamento',
         'quando': FieldValue.serverTimestamp(),

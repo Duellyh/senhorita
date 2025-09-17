@@ -111,10 +111,34 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     '52',
     '54',
   ];
-  Map<String, int> tamanhosSelecionados = {
-    for (var t in ['EPP', 'PP', 'P', 'M', 'G', 'GG', 'XG', '50', '52', '54'])
-      t: 0,
-  };
+
+  // Grade Tamanho × Cor (inicialização preguiçosa)
+  Map<String, Map<String, int>> tamanhosCoresSelecionados = {};
+
+  // Helpers para grade
+  int _calcularTotalGrade(Map<String, Map<String, int>> grade) {
+    var total = 0;
+    for (final cores in grade.values) {
+      for (final q in cores.values) {
+        total += (q);
+      }
+    }
+    return total;
+  }
+
+  Map<String, Map<String, int>> _compactarGrade(
+    Map<String, Map<String, int>> grade,
+  ) {
+    final saida = <String, Map<String, int>>{};
+    grade.forEach((tam, cores) {
+      final filtradas = <String, int>{};
+      cores.forEach((cor, q) {
+        if ((q) > 0) filtradas[cor] = q;
+      });
+      if (filtradas.isNotEmpty) saida[tam] = filtradas;
+    });
+    return saida;
+  }
 
   @override
   void initState() {
@@ -137,11 +161,42 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
       categoriaSelecionada = data['categoria'];
       codigoBarrasController.text = data['codigoBarras'] ?? '';
 
-      final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
-      if (tamanhos != null) {
-        tamanhosSelecionados = {
-          for (var t in tamanhosDisponiveis) t: (tamanhos[t] as int?) ?? 0,
-        };
+      // 1) Tenta ler o novo formato: tamanhosCores
+      final Map<String, dynamic>? tcDbRaw =
+          data['tamanhosCores'] as Map<String, dynamic>?;
+      if (tcDbRaw != null) {
+        // Converte p/ Map<String, Map<String,int>>
+        tcDbRaw.forEach((tam, coresRaw) {
+          final coresMap = <String, int>{};
+          if (coresRaw is Map) {
+            coresRaw.forEach((cor, q) {
+              final qtd = (q is num)
+                  ? q.toInt()
+                  : int.tryParse(q.toString()) ?? 0;
+              if (qtd > 0) coresMap[cor.toString()] = qtd;
+            });
+          }
+          if (coresMap.isNotEmpty) {
+            tamanhosCoresSelecionados[tam.toString()] = coresMap;
+          }
+        });
+      } else {
+        // 2) Retrocompat: se existir apenas 'tamanhos', migra p/ uma cor base
+        final Map<String, dynamic>? tamanhosAntigos =
+            data['tamanhos'] as Map<String, dynamic>?;
+        if (tamanhosAntigos != null) {
+          final corBase =
+              (data['cor'] as String?)?.toUpperCase() ?? 'CORES VARIADAS';
+          tamanhosAntigos.forEach((tam, q) {
+            final qtd = (q is num)
+                ? q.toInt()
+                : int.tryParse(q.toString()) ?? 0;
+            if (qtd > 0) {
+              final m = (tamanhosCoresSelecionados[tam] ??= <String, int>{});
+              m[corBase] = qtd;
+            }
+          });
+        }
       }
     }
   }
@@ -241,9 +296,15 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
 
     try {
       final fotoUrl = await uploadImagem(docRef.id);
-      int quantidadeTotal = categoriasSemTamanho.contains(categoriaSelecionada)
+      final bool semTamanho =
+          categoriaSelecionada != null &&
+          categoriasSemTamanho.contains(categoriaSelecionada!);
+
+      final gradeCompacta = _compactarGrade(tamanhosCoresSelecionados);
+
+      final int quantidadeTotal = semTamanho
           ? int.tryParse(quantidadeController.text) ?? 0
-          : tamanhosSelecionados.values.fold(0, (a, b) => a + b);
+          : _calcularTotalGrade(gradeCompacta);
 
       final nome = nomeController.text.trim().toUpperCase();
       final descricao = descricaoController.text.trim().toUpperCase();
@@ -264,14 +325,22 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
         'categoria': categoria,
         'dataCadastro': FieldValue.serverTimestamp(),
         'horaCadastro': FieldValue.serverTimestamp(),
-        if (categoriasSemTamanho.contains(categoria))
-          'quantidade': int.tryParse(quantidadeController.text) ?? 0
-        else ...{
-          'tamanhos': Map.fromEntries(
-            tamanhosSelecionados.entries.where((e) => e.value > 0),
-          ),
+        if (semTamanho) ...{
           'quantidade': quantidadeTotal,
+          // opcional: limpar campos antigos
+          'tamanhos': FieldValue.delete(),
+          'tamanhosCores': FieldValue.delete(),
+        } else ...{
+          'quantidade': quantidadeTotal,
+          // mantém 'tamanhos' como somatório por tamanho (retrocompat)
+          'tamanhos': {
+            for (final e in gradeCompacta.entries)
+              e.key: e.value.values.fold<int>(0, (a, b) => a + b),
+          },
+          // NOVO: grade Tamanho × Cor
+          'tamanhosCores': gradeCompacta,
         },
+
         'codigoBarras': codigoCurto,
 
         'busca': [
@@ -294,11 +363,20 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
         'cor': corSelecionada ?? '',
         'foto': fotoUrl ?? '',
         'quantidade': quantidadeTotal,
-        if (!categoriasSemTamanho.contains(categoria))
-          'tamanhos': Map.fromEntries(
-            tamanhosSelecionados.entries.where((e) => e.value > 0),
-          ),
+        if (!semTamanho) ...{
+          'tamanhos': {
+            for (final e in gradeCompacta.entries)
+              e.key: e.value.values.fold<int>(0, (a, b) => a + b),
+          },
+          'tamanhosCores': gradeCompacta,
+          // opcional: chave “achatada” p/ buscas
+          'estoqueVariantes': {
+            for (final e in gradeCompacta.entries)
+              for (final c in e.value.entries) '${e.key}#${c.key}': c.value,
+          },
+        },
       };
+
       await estoqueRef.set(estoqueAtualizado, SetOptions(merge: true));
 
       Navigator.of(context).pop(); // fecha o loader
@@ -527,39 +605,6 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                       ),
 
                       DropdownButtonFormField<String>(
-                        value: corSelecionada,
-                        decoration: const InputDecoration(labelText: 'Cor'),
-                        items: coresDisponiveis.entries.map((entry) {
-                          return DropdownMenuItem(
-                            value: entry.key,
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 16,
-                                  height: 16,
-                                  margin: const EdgeInsets.only(right: 8),
-                                  decoration: BoxDecoration(
-                                    color: entry.value,
-                                    border: Border.all(color: Colors.black26),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                ),
-                                Text(entry.key),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (value) {
-                          setState(() => corSelecionada = value);
-                        },
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Selecione uma cor';
-                          }
-                          return null;
-                        },
-                      ),
-                      DropdownButtonFormField<String>(
                         value: lojaSelecionada,
                         decoration: const InputDecoration(labelText: 'Loja'),
                         items: lojas
@@ -707,46 +752,10 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                   elevation: 2,
                   child: Padding(
                     padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Selecionar Tamanhos',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Color.fromARGB(255, 194, 131, 178),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Column(
-                          children: tamanhosDisponiveis.map((t) {
-                            return Row(
-                              children: [
-                                Expanded(child: Text(t)),
-                                IconButton(
-                                  icon: const Icon(Icons.remove),
-                                  onPressed: () => setState(() {
-                                    if (tamanhosSelecionados[t]! > 0)
-                                      tamanhosSelecionados[t] =
-                                          tamanhosSelecionados[t]! - 1;
-                                  }),
-                                ),
-                                Text('${tamanhosSelecionados[t]}'),
-                                IconButton(
-                                  icon: const Icon(Icons.add),
-                                  onPressed: () => setState(() {
-                                    tamanhosSelecionados[t] =
-                                        tamanhosSelecionados[t]! + 1;
-                                  }),
-                                ),
-                              ],
-                            );
-                          }).toList(),
-                        ),
-                      ],
-                    ),
+                    child: _gradeTamanhoCor(),
                   ),
                 ),
+
               const SizedBox(height: 80),
             ],
           ),
@@ -787,6 +796,102 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _gradeTamanhoCor() {
+    // garante que todos os tamanhos existem no mapa
+    for (final t in tamanhosDisponiveis) {
+      tamanhosCoresSelecionados.putIfAbsent(t, () => <String, int>{});
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Selecionar Tamanhos e Cores',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Color.fromARGB(255, 194, 131, 178),
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        ...tamanhosDisponiveis.map((tam) {
+          final coresMap = tamanhosCoresSelecionados[tam]!;
+          return Card(
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Tamanho: $tam',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: coresDisponiveis.entries.map((entry) {
+                      final cor = entry.key;
+                      final qtd = coresMap[cor] ?? 0;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.black12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 16,
+                              height: 16,
+                              margin: const EdgeInsets.only(right: 8),
+                              decoration: BoxDecoration(
+                                color: entry.value,
+                                border: Border.all(color: Colors.black26),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                            Text(cor, style: const TextStyle(fontSize: 12)),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: const Icon(Icons.remove, size: 18),
+                              onPressed: () {
+                                setState(() {
+                                  final atual = coresMap[cor] ?? 0;
+                                  if (atual > 0) coresMap[cor] = atual - 1;
+                                });
+                              },
+                            ),
+                            Text('$qtd'),
+                            IconButton(
+                              icon: const Icon(Icons.add, size: 18),
+                              onPressed: () {
+                                setState(() {
+                                  final atual = coresMap[cor] ?? 0;
+                                  coresMap[cor] = atual + 1;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ],
     );
   }
 }

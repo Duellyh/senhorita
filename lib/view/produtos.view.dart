@@ -96,9 +96,11 @@ class _ProdutosViewState extends State<ProdutosView> {
   void _mostrarEtiquetaDialog(BuildContext context, DocumentSnapshot produto) {
     final data = produto.data() as Map<String, dynamic>;
     final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
-    final temTamanho = tamanhos != null && tamanhos.isNotEmpty;
+    final tc = data['tamanhosCores'] as Map<String, dynamic>?;
 
+    final bool temGrade = tc != null && tc.isNotEmpty;
     String? tamanhoSelecionado;
+    String? corSelecionadaEtiqueta;
 
     showDialog(
       context: context,
@@ -140,7 +142,44 @@ class _ProdutosViewState extends State<ProdutosView> {
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
-                      if (temTamanho)
+                      if (temGrade) ...[
+                        DropdownButtonFormField<String>(
+                          value: tamanhoSelecionado,
+                          decoration: const InputDecoration(
+                            labelText: 'Selecione o Tamanho',
+                          ),
+                          items: tc.keys.map((tam) {
+                            return DropdownMenuItem(
+                              value: tam,
+                              child: Text(tam),
+                            );
+                          }).toList(),
+                          onChanged: (value) => setState(() {
+                            tamanhoSelecionado = value;
+                            corSelecionadaEtiqueta =
+                                null; // reset cor ao trocar tamanho
+                          }),
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: corSelecionadaEtiqueta,
+                          decoration: const InputDecoration(
+                            labelText: 'Selecione a Cor',
+                          ),
+                          items: (tamanhoSelecionado == null)
+                              ? const []
+                              : (tc[tamanhoSelecionado] as Map).keys
+                                    .map<DropdownMenuItem<String>>((cor) {
+                                      return DropdownMenuItem(
+                                        value: cor.toString(),
+                                        child: Text(cor.toString()),
+                                      );
+                                    })
+                                    .toList(),
+                          onChanged: (value) =>
+                              setState(() => corSelecionadaEtiqueta = value),
+                        ),
+                      ] else if (tamanhos != null && tamanhos.isNotEmpty) ...[
                         DropdownButtonFormField<String>(
                           value: tamanhoSelecionado,
                           decoration: const InputDecoration(
@@ -155,6 +194,7 @@ class _ProdutosViewState extends State<ProdutosView> {
                           onChanged: (value) =>
                               setState(() => tamanhoSelecionado = value),
                         ),
+                      ],
                       const SizedBox(height: 8),
                       DropdownButtonFormField<Printer>(
                         value: impressoraSelecionada,
@@ -193,15 +233,25 @@ class _ProdutosViewState extends State<ProdutosView> {
                   ),
                   TextButton(
                     onPressed: () {
-                      if (temTamanho && tamanhoSelecionado == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Selecione um tamanho antes de imprimir.',
+                      if (temGrade) {
+                        if (tamanhoSelecionado == null ||
+                            corSelecionadaEtiqueta == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione tamanho e cor.'),
                             ),
-                          ),
-                        );
-                        return;
+                          );
+                          return;
+                        }
+                      } else if (tamanhos != null && tamanhos.isNotEmpty) {
+                        if (tamanhoSelecionado == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione um tamanho.'),
+                            ),
+                          );
+                          return;
+                        }
                       }
 
                       if (impressoraSelecionada == null) {
@@ -219,6 +269,9 @@ class _ProdutosViewState extends State<ProdutosView> {
                         produto.id,
                         tamanhoSelecionado,
                         impressoraSelecionada!,
+                        corSelecionadaEtiqueta: temGrade
+                            ? corSelecionadaEtiqueta
+                            : null,
                       );
                     },
                     child: const Text('Imprimir'),
@@ -236,8 +289,9 @@ class _ProdutosViewState extends State<ProdutosView> {
     Map<String, dynamic> data,
     String id,
     String? tamanhoSelecionado,
-    Printer impressoraSelecionada,
-  ) async {
+    Printer impressoraSelecionada, {
+    String? corSelecionadaEtiqueta,
+  }) async {
     final doc = pw.Document();
 
     // Tamanho ajustado para caber duas etiquetas na largura de 90mm
@@ -269,6 +323,13 @@ class _ProdutosViewState extends State<ProdutosView> {
                 style: const pw.TextStyle(fontSize: 6),
                 textAlign: pw.TextAlign.center,
               ),
+            if (corSelecionadaEtiqueta != null)
+              pw.Text(
+                'Cor: $corSelecionadaEtiqueta',
+                style: const pw.TextStyle(fontSize: 6),
+                textAlign: pw.TextAlign.center,
+              ),
+
             pw.Text(
               'R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
               style: const pw.TextStyle(fontSize: 6),
@@ -548,12 +609,33 @@ class _ProdutosViewState extends State<ProdutosView> {
             final codigo = (d['codigoBarras'] ?? doc.id).toString();
             final nome = (d['nome'] ?? '').toString();
             final categoria = (d['categoria'] ?? '').toString();
-            final cor = (d['cor'] ?? '').toString();
+            final cor = (d['cor'] ?? '')
+                .toString(); // cor “principal” (opcional)
             final loja = (d['loja'] ?? '').toString();
             final desc = (d['descricao'] ?? '').toString();
 
-            // normaliza tudo
-            return _norm('$nome $categoria $codigo $cor $loja $desc');
+            // inclui tamanhos (somatório) e as variantes Tamanho×Cor no texto de busca
+            final tamanhos =
+                (d['tamanhos'] as Map?)?.keys
+                    .map((e) => e.toString())
+                    .join(' ') ??
+                '';
+            final tc = d['tamanhosCores'] as Map<String, dynamic>?;
+            final variantesStr = tc == null
+                ? ''
+                : tc.entries
+                      .expand((e) {
+                        final tam = e.key;
+                        final cores = (e.value as Map).keys.map(
+                          (c) => '$tam $c',
+                        );
+                        return cores;
+                      })
+                      .join(' ');
+
+            return _norm(
+              '$nome $categoria $codigo $cor $loja $desc $tamanhos $variantesStr',
+            );
           }
 
           // AND para todas as palavras; a última pode ser parcial (já que está digitando)
@@ -589,15 +671,30 @@ class _ProdutosViewState extends State<ProdutosView> {
               final produto = produtosFiltrados[index];
 
               final data = produto.data() as Map<String, dynamic>;
-              final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
+
+              final Map<String, dynamic>? tamanhos =
+                  data['tamanhos'] as Map<String, dynamic>?;
+              final Map<String, dynamic>? tamanhosCores =
+                  data['tamanhosCores'] as Map<String, dynamic>?;
+
               bool estoqueBaixo = false;
-              if (tamanhos == null || tamanhos.isEmpty) {
-                final quantidade = data['quantidade'] ?? 0;
-                estoqueBaixo = quantidade <= 3;
-              } else {
+              if (tamanhosCores != null && tamanhosCores.isNotEmpty) {
+                // baixo se qualquer variante <= 2
+                estoqueBaixo = tamanhosCores.values.any((cores) {
+                  if (cores is Map) {
+                    return cores.values.any(
+                      (q) => (q is num) && q.toInt() <= 2,
+                    );
+                  }
+                  return false;
+                });
+              } else if (tamanhos != null && tamanhos.isNotEmpty) {
                 estoqueBaixo = tamanhos.values.any(
-                  (qtd) => qtd is int && qtd <= 2,
+                  (qtd) => qtd is num && qtd.toInt() <= 2,
                 );
+              } else {
+                final quantidade = (data['quantidade'] ?? 0) as num;
+                estoqueBaixo = quantidade.toInt() <= 3;
               }
 
               return Card(
@@ -649,10 +746,6 @@ class _ProdutosViewState extends State<ProdutosView> {
                                   style: const TextStyle(fontSize: 12),
                                 ),
                                 Text(
-                                  'Cor: ${data['cor'] ?? '-'}',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                Text(
                                   'Loja: ${data['loja'] ?? '-'}',
                                   style: const TextStyle(fontSize: 12),
                                 ),
@@ -680,12 +773,75 @@ class _ProdutosViewState extends State<ProdutosView> {
                             ),
                           ),
 
-                          if (tamanhos != null && tamanhos.isNotEmpty)
-                            ...tamanhos.entries.map(
-                              (e) => Text('${e.key}: ${e.value}'),
+                          if (tamanhosCores != null &&
+                              tamanhosCores.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: tamanhosCores.entries.expand<Widget>((
+                                tamEntry,
+                              ) {
+                                final tam = tamEntry.key;
+                                final cores = (tamEntry.value as Map)
+                                    .cast<String, dynamic>();
+                                return cores.entries.map((corEntry) {
+                                  final cor = corEntry.key;
+                                  final qtd = (corEntry.value is num)
+                                      ? (corEntry.value as num).toInt()
+                                      : 0;
+                                  return Chip(
+                                    label: Text('$tam • $cor: $qtd'),
+                                    backgroundColor: qtd <= 2
+                                        ? Colors.red.shade50
+                                        : Colors.grey.shade200,
+                                    labelStyle: TextStyle(
+                                      color: qtd <= 2
+                                          ? Colors.red
+                                          : Colors.black87,
+                                      fontSize: 12,
+                                    ),
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 0,
+                                    ),
+                                  );
+                                });
+                              }).toList(),
                             ),
-                          if (estoqueBaixo)
-                            Icon(Icons.warning, color: Colors.red, size: 20),
+                          ] else if (tamanhos != null &&
+                              tamanhos.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: tamanhos.entries.map((e) {
+                                final qtd = (e.value is num)
+                                    ? (e.value as num).toInt()
+                                    : 0;
+                                return Chip(
+                                  label: Text('${e.key}: $qtd'),
+                                  backgroundColor: qtd <= 2
+                                      ? Colors.red.shade50
+                                      : Colors.grey.shade200,
+                                  labelStyle: TextStyle(
+                                    color: qtd <= 2
+                                        ? Colors.red
+                                        : Colors.black87,
+                                    fontSize: 12,
+                                  ),
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 0,
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
                         ],
                       ),
 

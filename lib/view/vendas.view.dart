@@ -32,6 +32,7 @@ class _VendasViewState extends State<VendasView> {
   bool carregandoBusca = false;
   Map<String, dynamic>? produtoEncontrado;
   String? tamanhoSelecionado;
+  String? corSelecionada; // <-- NOVO: cor da variante escolhida
   final List<Map<String, dynamic>> itensVendidos = [];
   final TextEditingController precoPromocionalController =
       TextEditingController();
@@ -648,7 +649,10 @@ class _VendasViewState extends State<VendasView> {
     double totalPago,
   ) async {
     final nomeLoja = await buscarNomeLoja();
+
+    // Cria o documento sem fontes personalizadas (usa padrão)
     final pdf = pw.Document();
+
     final valorFrete = frete;
 
     // Calcular total dos produtos vendidos
@@ -715,6 +719,7 @@ class _VendasViewState extends State<VendasView> {
                 ...itens.map((item) {
                   final nome = item['produtoNome'] ?? '';
                   final tamanho = item['tamanho'] ?? '';
+                  final cor = item['cor'] ?? '';
                   final qtd = item['quantidade'] ?? 0;
                   final preco = item['precoFinal'] ?? 0.0;
                   final precoPromocional = item['precoPromocional'] ?? 0.0;
@@ -737,7 +742,7 @@ class _VendasViewState extends State<VendasView> {
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(
-                        "$nome ${tamanho.isNotEmpty ? '($tamanho)' : ''}",
+                        "$nome ${tamanho.isNotEmpty ? '($tamanho' : ''}${tamanho.isNotEmpty && cor.toString().isNotEmpty ? ' • ' : ''}${cor.toString().isNotEmpty ? cor : ''}${tamanho.isNotEmpty ? ')' : ''}",
                         style: pw.TextStyle(fontSize: 8),
                       ),
                       pw.Text(
@@ -841,7 +846,21 @@ class _VendasViewState extends State<VendasView> {
         'quantidade': quantidade,
         'tamanho': tamanhoSelecionado ?? '',
         'precoFinal': precoComDesconto,
+        'cor': corSelecionada ?? '', // <-- NOVO
+        'categoria':
+            produtoEncontrado?['categoria'], // <-- Útil para relatórios
       };
+      // Se o produto usa grade Tamanho×Cor, exigir ambos
+      final usaGrade =
+          (produtoEncontrado?['tamanhosCores'] as Map?)?.isNotEmpty == true;
+      if (usaGrade) {
+        if (tamanhoSelecionado == null || corSelecionada == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Selecione tamanho e cor.')),
+          );
+          return;
+        }
+      }
 
       setState(() {
         itensVendidos.add(item);
@@ -851,6 +870,7 @@ class _VendasViewState extends State<VendasView> {
         produtoEncontrado = null;
         tamanhoSelecionado = null;
         quantidade = 1;
+        corSelecionada = null; // <-- limpar seleção de cor
       });
     }
   }
@@ -915,6 +935,15 @@ class _VendasViewState extends State<VendasView> {
           .toList();
 
       final vendaRef = await firestore.collection('vendas').add({
+        'produtoId':
+            produtoEncontrado?['docId'] ??
+            produtoEncontrado?['id'], // prefira docId (id do Firestore)
+        'produtoNome': produtoEncontrado?['nome'],
+        'codigoBarras': produtoEncontrado?['codigoBarras'],
+        'quantidade': quantidade,
+        'tamanho': tamanhoSelecionado ?? '',
+        'cor': corSelecionada ?? '',
+
         'dataVenda': DateTime.now(),
         'totalVenda': totalVenda,
         'tipoNota': tipoNotaSelecionada,
@@ -953,93 +982,80 @@ class _VendasViewState extends State<VendasView> {
       });
 
       for (final item in itensComValorReal) {
-        final produtoId = item['produtoId'];
-        final produtoDocId = item['docId'];
-        final tamanho = item['tamanho'];
-        final quantidadeVendida = item['quantidade'];
-        final valorRealItem = item['valorReal'] ?? 0.0;
-
-        final estoqueQuery = await firestore
-            .collection('estoque')
-            .where('produtoId', isEqualTo: produtoId)
-            .where('tamanho', isEqualTo: tamanho)
-            .limit(1)
-            .get();
-
-        if (estoqueQuery.docs.isNotEmpty) {
-          final estoqueDoc = estoqueQuery.docs.first;
-          final estoqueRef = estoqueDoc.reference;
-          final estoqueAtual = (estoqueDoc['quantidade'] ?? 0) as int;
-          final novaQuantidade = estoqueAtual - quantidadeVendida;
-
-          if (novaQuantidade > 0) {
-            batch.update(estoqueRef, {'quantidade': novaQuantidade});
-          } else {
-            batch.delete(estoqueRef);
-          }
-        }
-
+        final produtoDocId =
+            item['docId'] as String?; // você já salva isso no item
         final produtoRef = firestore.collection('produtos').doc(produtoDocId);
-        final produtoDocSnapshot = await produtoRef.get();
+        final estoqueRef = firestore.collection('estoque').doc(produtoDocId);
 
-        if (produtoDocSnapshot.exists) {
-          final produtoData = produtoDocSnapshot.data() as Map<String, dynamic>;
+        final tamanho = (item['tamanho'] ?? '') as String;
+        final cor = (item['cor'] ?? '') as String; // <-- NOVO
+        final quantidadeVendida = (item['quantidade'] ?? 0) as int;
 
-          final possuiTamanhos =
-              produtoData.containsKey('tamanhos') &&
-              (produtoData['tamanhos'] as Map<String, dynamic>).isNotEmpty;
+        // 1) Se for variante (tem tamanho e cor), baixa na grade
+        if (tamanho.isNotEmpty && cor.isNotEmpty) {
+          // produtos
+          batch.update(produtoRef, {
+            'tamanhosCores.$tamanho.$cor': FieldValue.increment(
+              -quantidadeVendida,
+            ),
+            'tamanhos.$tamanho': FieldValue.increment(
+              -quantidadeVendida,
+            ), // retrocompat
+            'quantidade': FieldValue.increment(-quantidadeVendida),
+          });
 
-          if (possuiTamanhos && tamanho.isNotEmpty) {
-            Map<String, dynamic> tamanhos = Map<String, dynamic>.from(
-              produtoData['tamanhos'],
-            );
-            final estoqueAtualTamanho = tamanhos[tamanho] ?? 0;
-            final novoEstoqueTamanho = estoqueAtualTamanho - quantidadeVendida;
-
-            if (novoEstoqueTamanho > 0) {
-              tamanhos[tamanho] = novoEstoqueTamanho;
-            } else {
-              tamanhos.remove(tamanho);
-            }
-
-            final novaQuantidadeTotalProduto = tamanhos.values.fold<int>(
-              0,
-              (soma, qtd) => soma + (qtd as int),
-            );
-
-            batch.update(produtoRef, {
-              'tamanhos': tamanhos,
-              'quantidade': novaQuantidadeTotalProduto,
-            });
-          } else {
-            final quantidadeAtual = (produtoData['quantidade'] ?? 0) as int;
-            final novaQuantidade = quantidadeAtual - quantidadeVendida;
-
-            batch.update(produtoRef, {
-              'quantidade': novaQuantidade > 0 ? novaQuantidade : 0,
-            });
-          }
-
-          await firestore.collection('vendidos').add({
-            'produtoId': produtoId,
-            'produtoNome': item['produtoNome'] ?? '',
-            'codigoBarras': item['codigoBarras'] ?? '',
-            'quantidade': quantidadeVendida,
-            'tamanho': tamanho,
-            'precoFinal': item['precoFinal'] ?? 0.0,
-            'dataVenda': DateTime.now(),
-            'horaVenda': DateTime.now().toIso8601String(),
-            'vendaId': vendaRef.id,
-            'detalhesProduto': produtoData,
-            'desconto': item['desconto'] ?? 0.0,
-            'precoPromocional': item['precoPromocional'] ?? 0.0,
-            'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
-            'usuarioId': FirebaseAuth.instance.currentUser?.uid,
-            'funcionario': funcionarioSelecionado ?? '---',
-            'valorReal': valorRealItem,
-            'categoria': produtoData['categoria'] ?? 'Sem categoria',
+          // estoque (espelho)
+          batch.update(estoqueRef, {
+            'tamanhosCores.$tamanho.$cor': FieldValue.increment(
+              -quantidadeVendida,
+            ),
+            'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
+            'quantidade': FieldValue.increment(-quantidadeVendida),
+            'estoqueVariantes.${tamanho}#${cor}': FieldValue.increment(
+              -quantidadeVendida,
+            ),
           });
         }
+        // 2) Se for somente tamanho (modelo antigo)
+        else if (tamanho.isNotEmpty) {
+          batch.update(produtoRef, {
+            'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
+            'quantidade': FieldValue.increment(-quantidadeVendida),
+          });
+          batch.update(estoqueRef, {
+            'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
+            'quantidade': FieldValue.increment(-quantidadeVendida),
+          });
+        }
+        // 3) Sem variação
+        else {
+          batch.update(produtoRef, {
+            'quantidade': FieldValue.increment(-quantidadeVendida),
+          });
+          batch.update(estoqueRef, {
+            'quantidade': FieldValue.increment(-quantidadeVendida),
+          });
+        }
+
+        // (opcional) registrar item em 'vendidos' mantendo a cor
+        await firestore.collection('vendidos').add({
+          'produtoId': item['produtoId'],
+          'produtoNome': item['produtoNome'] ?? '',
+          'codigoBarras': item['codigoBarras'] ?? '',
+          'quantidade': quantidadeVendida,
+          'tamanho': tamanho,
+          'cor': corSelecionada ?? '',
+          'precoFinal': item['precoFinal'] ?? 0.0,
+          'dataVenda': DateTime.now(),
+          'horaVenda': DateTime.now().toIso8601String(),
+          'vendaId': vendaRef.id,
+          'desconto': item['desconto'] ?? 0.0,
+          'precoPromocional': item['precoPromocional'] ?? 0.0,
+          'usuarioId': FirebaseAuth.instance.currentUser?.uid,
+          'funcionario': funcionarioSelecionado ?? '---',
+          'valorReal': item['valorReal'] ?? 0.0,
+          'categoria': (item['categoria'] ?? 'Sem categoria'),
+        });
       }
 
       await batch.commit();
@@ -1082,6 +1098,8 @@ class _VendasViewState extends State<VendasView> {
   @override
   Widget build(BuildContext context) {
     final tamanhosMap = produtoEncontrado?['tamanhos'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tamanhosCoresMap =
+        produtoEncontrado?['tamanhosCores'] as Map<String, dynamic>?;
 
     return Scaffold(
       appBar: AppBar(
@@ -1359,7 +1377,78 @@ class _VendasViewState extends State<VendasView> {
                           },
                         ),
 
-                        if (tamanhosMap != null && tamanhosMap.isNotEmpty) ...[
+                        // Preferência: se houver grade Tamanho×Cor, usa ela
+                        if (tamanhosCoresMap != null &&
+                            tamanhosCoresMap.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<String>(
+                            value: tamanhoSelecionado,
+                            decoration: const InputDecoration(
+                              labelText: 'Tamanho',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: tamanhosCoresMap.keys
+                                .where((tam) {
+                                  final cores =
+                                      (tamanhosCoresMap[tam] as Map?)
+                                          ?.cast<String, dynamic>() ??
+                                      {};
+                                  // só mostra tamanhos que possuem alguma cor com estoque > 0
+                                  return cores.values.any(
+                                    (q) => (q is num) && q.toInt() > 0,
+                                  );
+                                })
+                                .map(
+                                  (tam) => DropdownMenuItem<String>(
+                                    value: tam,
+                                    child: Text(tam),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) => setState(() {
+                              tamanhoSelecionado = value;
+                              corSelecionada = null; // reset ao trocar tamanho
+                            }),
+                            validator: (value) =>
+                                value == null ? 'Selecione um tamanho' : null,
+                          ),
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<String>(
+                            value: corSelecionada,
+                            decoration: const InputDecoration(
+                              labelText: 'Cor',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: (tamanhoSelecionado == null)
+                                ? const []
+                                : ((tamanhosCoresMap[tamanhoSelecionado]
+                                                  as Map?)
+                                              ?.cast<String, dynamic>() ??
+                                          {})
+                                      .entries
+                                      .where(
+                                        (e) =>
+                                            (e.value is num) &&
+                                            (e.value as num).toInt() > 0,
+                                      )
+                                      .map(
+                                        (e) => DropdownMenuItem<String>(
+                                          value: e.key,
+                                          child: Text(
+                                            '${e.key} (Estoque: ${(e.value as num).toInt()})',
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                            onChanged: (value) =>
+                                setState(() => corSelecionada = value),
+                            validator: (value) =>
+                                value == null ? 'Selecione uma cor' : null,
+                          ),
+                        ]
+                        // fallback para o modelo antigo por Tamanho apenas
+                        else if (tamanhosMap != null &&
+                            tamanhosMap.isNotEmpty) ...[
                           const SizedBox(height: 10),
                           DropdownButtonFormField<String>(
                             value: tamanhoSelecionado,
@@ -1368,12 +1457,16 @@ class _VendasViewState extends State<VendasView> {
                               border: OutlineInputBorder(),
                             ),
                             items: tamanhosMap.entries
-                                .where((e) => e.value > 0)
+                                .where(
+                                  (e) =>
+                                      (e.value is num) &&
+                                      (e.value as num).toInt() > 0,
+                                )
                                 .map(
                                   (e) => DropdownMenuItem<String>(
                                     value: e.key,
                                     child: Text(
-                                      '${e.key} (Estoque: ${e.value})',
+                                      '${e.key} (Estoque: ${(e.value as num).toInt()})',
                                     ),
                                   ),
                                 )
@@ -1397,21 +1490,42 @@ class _VendasViewState extends State<VendasView> {
                             final val = int.tryParse(value ?? '');
                             if (val == null || val <= 0)
                               return 'Quantidade inválida';
-                            int estoque = 9999;
-                            final possuiTamanhosValidos =
-                                tamanhosMap != null && tamanhosMap.isNotEmpty;
 
-                            if (possuiTamanhosValidos &&
-                                tamanhoSelecionado != null) {
-                              estoque = tamanhosMap[tamanhoSelecionado] ?? 0;
-                            } else if (produtoEncontrado?['quantidade'] !=
-                                null) {
-                              estoque = produtoEncontrado!['quantidade'];
+                            int estoque = 9999;
+
+                            // 1) Modelo novo: Tamanho×Cor
+                            if (tamanhosCoresMap != null &&
+                                tamanhosCoresMap.isNotEmpty) {
+                              if (tamanhoSelecionado == null ||
+                                  corSelecionada == null) {
+                                return 'Selecione tamanho e cor';
+                              }
+                              final cores =
+                                  (tamanhosCoresMap[tamanhoSelecionado] as Map?)
+                                      ?.cast<String, dynamic>() ??
+                                  {};
+                              final q = (cores[corSelecionada] ?? 0);
+                              estoque = (q is num) ? q.toInt() : 0;
+                            }
+                            // 2) Modelo antigo: só Tamanho
+                            else if (tamanhosMap != null &&
+                                tamanhosMap.isNotEmpty) {
+                              if (tamanhoSelecionado == null)
+                                return 'Selecione um tamanho';
+                              final q = (tamanhosMap[tamanhoSelecionado] ?? 0);
+                              estoque = (q is num) ? q.toInt() : 0;
+                            }
+                            // 3) Sem variação: usa 'quantidade' total
+                            else if (produtoEncontrado?['quantidade'] != null) {
+                              estoque =
+                                  (produtoEncontrado!['quantidade'] as num)
+                                      .toInt();
                             }
 
                             if (val > estoque) return 'Estoque insuficiente';
                             return null;
                           },
+
                           onChanged: (value) {
                             final val = int.tryParse(value);
                             if (val != null) setState(() => quantidade = val);
