@@ -33,11 +33,11 @@ class _EstoqueViewState extends State<EstoqueView> {
 
   bool _isProdutoComEstoqueBaixo(Map<String, dynamic> data) {
     final quantidadeTotal = data['quantidade'] ?? 0;
-    if (quantidadeTotal <= 3) return true;
+    if (quantidadeTotal <= 1) return true;
 
     final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
     if (tamanhos != null) {
-      return tamanhos.values.any((qtd) => qtd is int && qtd <= 2);
+      return tamanhos.values.any((qtd) => qtd is int && qtd <= 0);
     }
 
     return false;
@@ -211,18 +211,6 @@ class _EstoqueViewState extends State<EstoqueView> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: double.infinity,
-                color: Colors.red.shade100,
-                padding: const EdgeInsets.all(12),
-                child: Text(
-                  'Total de produtos com estoque baixo: ${produtosBaixos.length}',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
               Expanded(
                 child: ListView.builder(
                   itemCount: produtosBaixos.length,

@@ -82,8 +82,8 @@ class _ProdutosViewState extends State<ProdutosView> {
 
   Future<int> _buscarQuantidadeEstoque(String produtoId) async {
     final estoqueSnapshot = await FirebaseFirestore.instance
-        .collection('estoque')
-        .where('idProduto', isEqualTo: produtoId)
+        .collection('produtos')
+        .where('codigoBarras', isEqualTo: produtoId)
         .limit(1)
         .get();
 
@@ -690,11 +690,11 @@ class _ProdutosViewState extends State<ProdutosView> {
                 });
               } else if (tamanhos != null && tamanhos.isNotEmpty) {
                 estoqueBaixo = tamanhos.values.any(
-                  (qtd) => qtd is num && qtd.toInt() <= 2,
+                  (qtd) => qtd is num && qtd.toInt() <= 0,
                 );
               } else {
                 final quantidade = (data['quantidade'] ?? 0) as num;
-                estoqueBaixo = quantidade.toInt() <= 3;
+                estoqueBaixo = quantidade.toInt() <= 1;
               }
 
               return Card(

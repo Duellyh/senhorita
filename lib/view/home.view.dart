@@ -54,31 +54,42 @@ class _HomeViewState extends State<HomeView> {
     return snapshot.docs.length;
   }
 
-  Future<int> contarProdutosComEstoqueBaixo() async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('produtos')
-        .get();
+  bool _ehEstoqueBaixo(Map<String, dynamic> data, {int threshold = 1}) {
+    // 1) Campo "quantidade" (sem grade)
+    final q = data['quantidade'];
+    if (q is num && q <= threshold) return true;
 
-    int contador = 0;
-
-    for (var doc in snapshot.docs) {
-      final data = doc.data();
-      final quantidade = data['quantidade'] ?? 0;
-      final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
-
-      // Produto sem tamanho
-      if ((tamanhos == null || tamanhos.isEmpty) && quantidade <= 3) {
-        contador++;
-      }
-
-      // Produto com tamanhos
-      if (tamanhos != null && tamanhos.isNotEmpty) {
-        final hasBaixo = tamanhos.values.any((qtd) => qtd is int && qtd <= 2);
-        if (hasBaixo) contador++;
+    // 2) Campo "tamanhos": { 'P': 1, 'M': 0, ... }
+    final tamanhos = data['tamanhos'];
+    if (tamanhos is Map) {
+      for (final v in tamanhos.values) {
+        if (v is num && v <= threshold) return true;
       }
     }
 
-    return contador;
+    // 3) Campo "tamanhosCores": { 'P': { 'PRETO': 1, 'BRANCO': 0 }, ... }
+    final tamanhosCores = data['tamanhosCores'];
+    if (tamanhosCores is Map) {
+      for (final corMap in tamanhosCores.values) {
+        if (corMap is Map) {
+          for (final v in corMap.values) {
+            if (v is num && v <= threshold) return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  Future<int> contarProdutosComEstoqueBaixo({int threshold = 1}) async {
+    final snap = await FirebaseFirestore.instance.collection('produtos').get();
+    var count = 0;
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      if (_ehEstoqueBaixo(data, threshold: threshold)) count++;
+    }
+    return count;
   }
 
   @override
@@ -300,9 +311,27 @@ class _HomeViewState extends State<HomeView> {
                         );
                       },
                       child: FutureBuilder<int>(
-                        future: contarProdutosComEstoqueBaixo(),
+                        future:
+                            contarProdutosComEstoqueBaixo(), // ou threshold: 2
                         builder: (context, snapshot) {
-                          final total = snapshot.data?.toString() ?? '...';
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return _kpiCard(
+                              'Produtos com Estoque baixo',
+                              '...',
+                              Icons.inventory,
+                              accentColor,
+                            );
+                          }
+                          if (snapshot.hasError) {
+                            return _kpiCard(
+                              'Produtos com Estoque baixo',
+                              '!',
+                              Icons.inventory,
+                              accentColor,
+                            );
+                          }
+                          final total = (snapshot.data ?? 0).toString();
                           return _kpiCard(
                             'Produtos com Estoque baixo',
                             total,
@@ -424,8 +453,9 @@ class _HomeViewState extends State<HomeView> {
           .limit(5)
           .snapshots(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
+        }
 
         final docs = snapshot.data!.docs;
         if (docs.isEmpty) return const Text('Nenhum produto encontrado.');

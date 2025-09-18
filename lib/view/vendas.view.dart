@@ -80,6 +80,23 @@ class _VendasViewState extends State<VendasView> {
     mostrarCampoFuncionario = false;
   }
 
+  double _freteAtual() {
+    final t = freteController.text.trim();
+    return t.isEmpty ? 0.0 : _converterParaDouble(t);
+  }
+
+  double _totalComFrete() => _calcularTotalGeral() + _freteAtual();
+
+  double _trocoAtual() {
+    final t = _calcularTotalPago() - _totalComFrete();
+    return t > 0 ? t : 0.0;
+  }
+
+  double _faltanteAtual() {
+    final f = _totalComFrete() - _calcularTotalPago();
+    return f > 0 ? f : 0.0;
+  }
+
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
       final doc = await FirebaseFirestore.instance
@@ -239,13 +256,15 @@ class _VendasViewState extends State<VendasView> {
     double totalVenda,
     double totalPago,
   ) async {
-    final troco = (totalPago - totalVenda).clamp(0, double.infinity);
     final nomeCliente = clienteNomeController.text.trim().isEmpty
         ? '---'
         : clienteNomeController.text.trim();
     final valorFrete = freteController.text.trim().isEmpty
         ? 0.0
         : _converterParaDouble(freteController.text.trim());
+
+    final totalComFrete = totalVenda + valorFrete;
+    final troco = (totalPago - totalComFrete).clamp(0, double.infinity);
 
     double totalDesconto = 0.0;
     double totalPromocional = 0.0;
@@ -902,8 +921,9 @@ class _VendasViewState extends State<VendasView> {
 
     try {
       double custoRealTotal = 0;
-      List<Map<String, dynamic>> itensComValorReal = [];
+      final List<Map<String, dynamic>> itensComValorReal = [];
 
+      // 1) Enriquecer itens com valorReal (lendo da coleção 'produtos')
       for (final item in itensVendidos) {
         final produtoId = item['produtoId'];
         final quantidadeVendida = item['quantidade'];
@@ -917,12 +937,11 @@ class _VendasViewState extends State<VendasView> {
             .get();
 
         if (produtoQuery.docs.isNotEmpty) {
-          final produtoDoc = produtoQuery.docs.first;
-          final data = produtoDoc.data();
+          final data = produtoQuery.docs.first.data();
           valorReal = (data['valorReal'] ?? 0).toDouble();
         }
 
-        custoRealTotal += valorReal * quantidadeVendida;
+        custoRealTotal += valorReal * (quantidadeVendida as num).toDouble();
 
         final itemAtualizado = Map<String, dynamic>.from(item);
         itemAtualizado['valorReal'] = valorReal;
@@ -934,16 +953,14 @@ class _VendasViewState extends State<VendasView> {
           .toSet()
           .toList();
 
-      final vendaRef = await firestore.collection('vendas').add({
-        'produtoId':
-            produtoEncontrado?['docId'] ??
-            produtoEncontrado?['id'], // prefira docId (id do Firestore)
+      // 2) Registrar a venda
+      await firestore.collection('vendas').add({
+        'produtoId': produtoEncontrado?['docId'] ?? produtoEncontrado?['id'],
         'produtoNome': produtoEncontrado?['nome'],
         'codigoBarras': produtoEncontrado?['codigoBarras'],
         'quantidade': quantidade,
         'tamanho': tamanhoSelecionado ?? '',
         'cor': corSelecionada ?? '',
-
         'dataVenda': DateTime.now(),
         'totalVenda': totalVenda,
         'tipoNota': tipoNotaSelecionada,
@@ -981,19 +998,55 @@ class _VendasViewState extends State<VendasView> {
         ),
       });
 
+      // 3) Dar baixa SOMENTE na coleção 'produtos'
       for (final item in itensComValorReal) {
-        final produtoDocId =
-            item['docId'] as String?; // você já salva isso no item
+        final String? produtoDocId = item['docId'] as String?;
+        if (produtoDocId == null || produtoDocId.isEmpty) {
+          // fallback opcional: tente resolver via codigoBarras
+          final cb = item['produtoId'];
+          final q = await firestore
+              .collection('produtos')
+              .where('codigoBarras', isEqualTo: cb)
+              .limit(1)
+              .get();
+          if (q.docs.isEmpty) continue;
+          // use o docId encontrado
+          final produtoRef = q.docs.first.reference;
+
+          final tamanho = (item['tamanho'] ?? '') as String;
+          final cor = (item['cor'] ?? '') as String;
+          final quantidadeVendida = (item['quantidade'] ?? 0) as int;
+
+          if (tamanho.isNotEmpty && cor.isNotEmpty) {
+            batch.update(produtoRef, {
+              'tamanhosCores.$tamanho.$cor': FieldValue.increment(
+                -quantidadeVendida,
+              ),
+              'tamanhos.$tamanho': FieldValue.increment(
+                -quantidadeVendida,
+              ), // retrocompat
+              'quantidade': FieldValue.increment(-quantidadeVendida),
+            });
+          } else if (tamanho.isNotEmpty) {
+            batch.update(produtoRef, {
+              'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
+              'quantidade': FieldValue.increment(-quantidadeVendida),
+            });
+          } else {
+            batch.update(produtoRef, {
+              'quantidade': FieldValue.increment(-quantidadeVendida),
+            });
+          }
+          continue;
+        }
+
         final produtoRef = firestore.collection('produtos').doc(produtoDocId);
-        final estoqueRef = firestore.collection('estoque').doc(produtoDocId);
 
         final tamanho = (item['tamanho'] ?? '') as String;
-        final cor = (item['cor'] ?? '') as String; // <-- NOVO
+        final cor = (item['cor'] ?? '') as String;
         final quantidadeVendida = (item['quantidade'] ?? 0) as int;
 
-        // 1) Se for variante (tem tamanho e cor), baixa na grade
         if (tamanho.isNotEmpty && cor.isNotEmpty) {
-          // produtos
           batch.update(produtoRef, {
             'tamanhosCores.$tamanho.$cor': FieldValue.increment(
               -quantidadeVendida,
@@ -1003,63 +1056,21 @@ class _VendasViewState extends State<VendasView> {
             ), // retrocompat
             'quantidade': FieldValue.increment(-quantidadeVendida),
           });
-
-          // estoque (espelho)
-          batch.update(estoqueRef, {
-            'tamanhosCores.$tamanho.$cor': FieldValue.increment(
-              -quantidadeVendida,
-            ),
-            'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
-            'quantidade': FieldValue.increment(-quantidadeVendida),
-            'estoqueVariantes.${tamanho}#${cor}': FieldValue.increment(
-              -quantidadeVendida,
-            ),
-          });
-        }
-        // 2) Se for somente tamanho (modelo antigo)
-        else if (tamanho.isNotEmpty) {
+        } else if (tamanho.isNotEmpty) {
           batch.update(produtoRef, {
             'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
             'quantidade': FieldValue.increment(-quantidadeVendida),
           });
-          batch.update(estoqueRef, {
-            'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
-            'quantidade': FieldValue.increment(-quantidadeVendida),
-          });
-        }
-        // 3) Sem variação
-        else {
+        } else {
           batch.update(produtoRef, {
             'quantidade': FieldValue.increment(-quantidadeVendida),
           });
-          batch.update(estoqueRef, {
-            'quantidade': FieldValue.increment(-quantidadeVendida),
-          });
         }
-
-        // (opcional) registrar item em 'vendidos' mantendo a cor
-        await firestore.collection('vendidos').add({
-          'produtoId': item['produtoId'],
-          'produtoNome': item['produtoNome'] ?? '',
-          'codigoBarras': item['codigoBarras'] ?? '',
-          'quantidade': quantidadeVendida,
-          'tamanho': tamanho,
-          'cor': corSelecionada ?? '',
-          'precoFinal': item['precoFinal'] ?? 0.0,
-          'dataVenda': DateTime.now(),
-          'horaVenda': DateTime.now().toIso8601String(),
-          'vendaId': vendaRef.id,
-          'desconto': item['desconto'] ?? 0.0,
-          'precoPromocional': item['precoPromocional'] ?? 0.0,
-          'usuarioId': FirebaseAuth.instance.currentUser?.uid,
-          'funcionario': funcionarioSelecionado ?? '---',
-          'valorReal': item['valorReal'] ?? 0.0,
-          'categoria': (item['categoria'] ?? 'Sem categoria'),
-        });
       }
 
       await batch.commit();
 
+      // 4) Cadastrar cliente se ainda não existe
       if (clienteNomeController.text.trim().isNotEmpty) {
         final clienteExiste = await firestore
             .collection('clientes')
@@ -1642,6 +1653,7 @@ class _VendasViewState extends State<VendasView> {
                           valorPagamentoController.text.replaceAll(',', '.'),
                         ) ??
                         0;
+
                     if (valor <= 0 || formaSelecionada == null) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
@@ -1652,18 +1664,42 @@ class _VendasViewState extends State<VendasView> {
                       );
                       return;
                     }
+
                     setState(() {
                       pagamentos.add({
                         'forma': formaSelecionada,
                         'valor': valor,
                       });
-                      setState(() {
-                        mostrarCampoFuncionario = true;
-                      });
+                      mostrarCampoFuncionario = true;
                       valorPagamentoController.clear();
                       formaSelecionada = null;
                     });
+
+                    // 💡 calcula após adicionar
+                    final totalPago = _calcularTotalPago();
+                    final totalComFrete = _totalComFrete();
+                    final troco = (totalPago - totalComFrete).clamp(
+                      0,
+                      double.infinity,
+                    );
+                    final faltante = (totalComFrete - totalPago).clamp(
+                      0,
+                      double.infinity,
+                    );
+
+                    // Mostra feedback instantâneo
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          troco > 0
+                              ? '💵 Troco: R\$ ${troco.toStringAsFixed(2)}'
+                              : '💳 Falta pagar: R\$ ${faltante.toStringAsFixed(2)}',
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
                   },
+
                   icon: const Icon(Icons.attach_money),
                   label: const Text('Adicionar Pagamento'),
                   style: ElevatedButton.styleFrom(
@@ -1687,14 +1723,24 @@ class _VendasViewState extends State<VendasView> {
                   'Total Pago: R\$ ${_calcularTotalPago().toStringAsFixed(2)}',
                 ),
                 Text(
-                  'Restante: R\$ ${(_calcularTotalGeral() - _calcularTotalPago()).clamp(0, double.infinity).toStringAsFixed(2)}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: _calcularTotalPago() >= _calcularTotalGeral()
-                        ? Colors.green
-                        : Colors.red,
-                  ),
+                  'Total (itens + frete): R\$ ${_totalComFrete().toStringAsFixed(2)}',
                 ),
+                if (_faltanteAtual() > 0)
+                  Text(
+                    'Restante: R\$ ${_faltanteAtual().toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red,
+                    ),
+                  ),
+                if (_trocoAtual() > 0)
+                  Text(
+                    'Troco: R\$ ${_trocoAtual().toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                    ),
+                  ),
               ],
               const SizedBox(height: 20),
 

@@ -352,33 +352,6 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
 
       await docRef.set(produtoAtualizado);
 
-      // 🔁 Atualização do estoque com merge: true
-      final estoqueRef = FirebaseFirestore.instance
-          .collection('estoque')
-          .doc(docRef.id);
-      final estoqueAtualizado = {
-        'idProduto': docRef.id,
-        'nome': nome,
-        'categoria': categoria,
-        'cor': corSelecionada ?? '',
-        'foto': fotoUrl ?? '',
-        'quantidade': quantidadeTotal,
-        if (!semTamanho) ...{
-          'tamanhos': {
-            for (final e in gradeCompacta.entries)
-              e.key: e.value.values.fold<int>(0, (a, b) => a + b),
-          },
-          'tamanhosCores': gradeCompacta,
-          // opcional: chave “achatada” p/ buscas
-          'estoqueVariantes': {
-            for (final e in gradeCompacta.entries)
-              for (final c in e.value.entries) '${e.key}#${c.key}': c.value,
-          },
-        },
-      };
-
-      await estoqueRef.set(estoqueAtualizado, SetOptions(merge: true));
-
       Navigator.of(context).pop(); // fecha o loader
       await showDialog(
         context: context,
@@ -752,7 +725,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                   elevation: 2,
                   child: Padding(
                     padding: const EdgeInsets.all(12),
-                    child: _gradeTamanhoCor(),
+                    child: _gradeTamanhoCorCompacta(context),
                   ),
                 ),
 
@@ -767,7 +740,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ElevatedButton.icon(
-              onPressed: () => ProdutosView(),
+              onPressed: () => Navigator.of(context).pop(),
               icon: const Icon(Icons.cancel),
               label: const Text('Cancelar'),
               style: ElevatedButton.styleFrom(
@@ -799,17 +772,20 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     );
   }
 
-  Widget _gradeTamanhoCor() {
-    // garante que todos os tamanhos existem no mapa
+  Widget _gradeTamanhoCorCompacta(BuildContext context) {
+    // garante as chaves
     for (final t in tamanhosDisponiveis) {
       tamanhosCoresSelecionados.putIfAbsent(t, () => <String, int>{});
     }
+
+    int somaCores(Map<String, int> m) =>
+        m.values.fold<int>(0, (acc, v) => acc + (v < 0 ? 0 : v));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Selecionar Tamanhos e Cores',
+          'Tamanhos, Quantidade e Cores',
           style: TextStyle(
             fontWeight: FontWeight.bold,
             color: Color.fromARGB(255, 194, 131, 178),
@@ -817,81 +793,408 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
         ),
         const SizedBox(height: 8),
 
+        // Cabeçalho
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF7F7F7),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: const [
+              SizedBox(
+                width: 64,
+                child: Text(
+                  'Tam.',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              SizedBox(
+                width: 110,
+                child: Text(
+                  'Qtd total',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              SizedBox(
+                width: 90,
+                child: Text(
+                  'Cores',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  'Resumo',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+
         ...tamanhosDisponiveis.map((tam) {
-          final coresMap = tamanhosCoresSelecionados[tam]!;
+          final mapCores = tamanhosCoresSelecionados[tam]!;
+          final total = somaCores(mapCores);
+
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 6),
             child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
                 children: [
-                  Text(
-                    'Tamanho: $tam',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  // Tamanho
+                  SizedBox(
+                    width: 64,
+                    child: Text(
+                      tam,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ),
-                  const SizedBox(height: 6),
 
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: coresDisponiveis.entries.map((entry) {
-                      final cor = entry.key;
-                      final qtd = coresMap[cor] ?? 0;
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
+                  // Quantidade total (editável ou somente leitura)
+                  SizedBox(
+                    width: 110,
+                    child: TextFormField(
+                      initialValue: total.toString(),
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: '0',
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(
                           horizontal: 10,
                           vertical: 8,
                         ),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.black12),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 16,
-                              height: 16,
-                              margin: const EdgeInsets.only(right: 8),
-                              decoration: BoxDecoration(
-                                color: entry.value,
-                                border: Border.all(color: Colors.black26),
-                                borderRadius: BorderRadius.circular(4),
+                      ),
+                      // Se quiser que editar esse campo distribua a quantidade nas cores,
+                      // escolha uma política. Abaixo: joga tudo em "SEM COR" se nenhuma cor marcada.
+                      onChanged: (v) {
+                        final novo = int.tryParse(v) ?? 0;
+                        setState(() {
+                          if (mapCores.isEmpty) {
+                            mapCores['SEM COR'] = novo;
+                          } else {
+                            // Estratégia simples: ajusta proporcionalmente mantendo distribuição
+                            final somaAtual = somaCores(mapCores);
+                            if (somaAtual <= 0) {
+                              // tudo em primeira cor
+                              final primeira = mapCores.keys.first;
+                              mapCores[primeira] = novo;
+                            } else {
+                              // proporção
+                              final fator = novo / somaAtual;
+                              final chaves = mapCores.keys.toList();
+                              int acumulado = 0;
+                              for (var i = 0; i < chaves.length; i++) {
+                                final k = chaves[i];
+                                int novaQtd = (mapCores[k]! * fator).round();
+                                if (i == chaves.length - 1) {
+                                  // corrige arredondamento na última
+                                  novaQtd = novo - acumulado;
+                                }
+                                mapCores[k] = novaQtd < 0 ? 0 : novaQtd;
+                                acumulado += mapCores[k]!;
+                              }
+                            }
+                          }
+                        });
+                      },
+                    ),
+                  ),
+
+                  // Botão "Cores"
+                  SizedBox(
+                    width: 90,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.palette_outlined, size: 18),
+                      label: const Text(
+                        'Cores',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onPressed: () async {
+                        final atualizado = await _abrirSeletorCores(
+                          context: context,
+                          titulo: 'Cores para $tam',
+                          coresDisponiveis: coresDisponiveis,
+                          mapaAtual: Map<String, int>.from(mapCores),
+                        );
+                        if (atualizado != null) {
+                          setState(() {
+                            // remove cores com 0
+                            atualizado.removeWhere((_, qtd) => (qtd <= 0));
+                            tamanhosCoresSelecionados[tam] = atualizado;
+                          });
+                        }
+                      },
+                    ),
+                  ),
+
+                  // Resumo: bolinhas + contagem
+                  Expanded(
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: mapCores.entries.where((e) => e.value > 0).map((
+                        e,
+                      ) {
+                        final corNome = e.key;
+                        final qtd = e.value;
+                        final cor =
+                            coresDisponiveis[corNome] ??
+                            const Color(0xFFEEEEEE);
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.black12),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 14,
+                                height: 14,
+                                margin: const EdgeInsets.only(right: 6),
+                                decoration: BoxDecoration(
+                                  color: cor,
+                                  border: Border.all(color: Colors.black26),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
                               ),
-                            ),
-                            Text(cor, style: const TextStyle(fontSize: 12)),
-                            const SizedBox(width: 8),
-                            IconButton(
-                              icon: const Icon(Icons.remove, size: 18),
-                              onPressed: () {
-                                setState(() {
-                                  final atual = coresMap[cor] ?? 0;
-                                  if (atual > 0) coresMap[cor] = atual - 1;
-                                });
-                              },
-                            ),
-                            Text('$qtd'),
-                            IconButton(
-                              icon: const Icon(Icons.add, size: 18),
-                              onPressed: () {
-                                setState(() {
-                                  final atual = coresMap[cor] ?? 0;
-                                  coresMap[cor] = atual + 1;
-                                });
-                              },
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
+                              Text(
+                                '$corNome ($qtd)',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
                   ),
                 ],
               ),
             ),
           );
         }).toList(),
+
+        const SizedBox(height: 4),
+
+        // Rodapé opcional: aplicar a todas / limpar zeros
+        Row(
+          children: [
+            TextButton.icon(
+              icon: const Icon(Icons.copy_all_outlined),
+              label: const Text('Aplicar cores do 1º tamanho para todos'),
+              onPressed: tamanhosDisponiveis.isEmpty
+                  ? null
+                  : () {
+                      setState(() {
+                        final t0 = tamanhosDisponiveis.first;
+                        final base = Map<String, int>.from(
+                          tamanhosCoresSelecionados[t0]!,
+                        );
+                        for (final t in tamanhosDisponiveis.skip(1)) {
+                          tamanhosCoresSelecionados[t] = Map<String, int>.from(
+                            base,
+                          );
+                        }
+                      });
+                    },
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              icon: const Icon(Icons.cleaning_services_outlined),
+              label: const Text('Remover cores com 0'),
+              onPressed: () {
+                setState(() {
+                  for (final t in tamanhosDisponiveis) {
+                    tamanhosCoresSelecionados[t]!.removeWhere(
+                      (_, qtd) => qtd <= 0,
+                    );
+                  }
+                });
+              },
+            ),
+          ],
+        ),
       ],
+    );
+  }
+
+  Future<Map<String, int>?> _abrirSeletorCores({
+    required BuildContext context,
+    required String titulo,
+    required Map<String, Color> coresDisponiveis,
+    required Map<String, int> mapaAtual,
+  }) async {
+    return showModalBottomSheet<Map<String, int>>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        // estado local para +/-
+        final ValueNotifier<Map<String, int>> selecao =
+            ValueNotifier<Map<String, int>>(Map<String, int>.from(mapaAtual));
+
+        void inc(String cor) {
+          final m = Map<String, int>.from(selecao.value);
+          m[cor] = (m[cor] ?? 0) + 1;
+          selecao.value = m;
+        }
+
+        void dec(String cor) {
+          final m = Map<String, int>.from(selecao.value);
+          final atual = (m[cor] ?? 0) - 1;
+          m[cor] = atual < 0 ? 0 : atual;
+          selecao.value = m;
+        }
+
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            left: 16,
+            right: 16,
+            top: 16,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 4,
+                width: 48,
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                titulo,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              Flexible(
+                child: ValueListenableBuilder<Map<String, int>>(
+                  valueListenable: selecao,
+                  builder: (_, mapa, __) {
+                    return SingleChildScrollView(
+                      child: Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: coresDisponiveis.entries.map((e) {
+                          final corNome = e.key;
+                          final color = e.value;
+                          final qtd = mapa[corNome] ?? 0;
+
+                          return Container(
+                            width: 170,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.black12),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      width: 16,
+                                      height: 16,
+                                      decoration: BoxDecoration(
+                                        color: color,
+                                        border: Border.all(
+                                          color: Colors.black26,
+                                        ),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        corNome,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.remove_circle_outline,
+                                      ),
+                                      onPressed: () => dec(corNome),
+                                    ),
+                                    SizedBox(
+                                      width: 40,
+                                      child: Text(
+                                        '$qtd',
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.add_circle_outline,
+                                      ),
+                                      onPressed: () => inc(corNome),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    );
+                  },
+                ),
+              ),
+
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Cancelar'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.check),
+                      onPressed: () {
+                        final resultado = Map<String, int>.from(selecao.value);
+                        // normaliza zeros
+                        resultado.removeWhere((_, qtd) => qtd <= 0);
+                        Navigator.of(ctx).pop(resultado);
+                      },
+                      label: const Text('Aplicar'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
     );
   }
 }
