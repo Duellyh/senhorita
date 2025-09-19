@@ -1,6 +1,6 @@
 [Setup]
 AppName=Senhorita
-AppVersion=1.2.2
+AppVersion=1.6
 DefaultDirName={pf}\Senhorita
 DefaultGroupName=Senhorita
 OutputBaseFilename=Instalador_Senhorita

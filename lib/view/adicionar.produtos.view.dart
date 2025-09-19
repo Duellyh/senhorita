@@ -112,6 +112,20 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     '54',
   ];
 
+  // no _SeuState:
+  final Map<String, TextEditingController> _qtdCtrlPorTam = {};
+
+  void _sincronizarQtdTotalComCores(String tam) {
+    final mapCores = tamanhosCoresSelecionados[tam] ?? <String, int>{};
+    final total = mapCores.values.fold<int>(0, (a, v) => a + (v < 0 ? 0 : v));
+    // garante controller e atualiza texto
+    final ctrl = _qtdCtrlPorTam.putIfAbsent(tam, () => TextEditingController());
+    // evita loop de setState desnecessário
+    if (ctrl.text != total.toString()) {
+      ctrl.text = total.toString();
+    }
+  }
+
   // Grade Tamanho × Cor (inicialização preguiçosa)
   Map<String, Map<String, int>> tamanhosCoresSelecionados = {};
 
@@ -810,16 +824,16 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                 ),
               ),
               SizedBox(
-                width: 110,
+                width: 120, // +10px
                 child: Text(
-                  'Qtd total',
+                  'Quantidade total',
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
               SizedBox(
-                width: 90,
+                width: 160, // botão mais largo
                 child: Text(
-                  'Cores',
+                  '       Cores',
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -838,6 +852,13 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           final mapCores = tamanhosCoresSelecionados[tam]!;
           final total = somaCores(mapCores);
 
+          // garante controller e sincroniza texto inicial
+          final qtdCtrl = _qtdCtrlPorTam.putIfAbsent(
+            tam,
+            () => TextEditingController(text: total.toString()),
+          );
+          _sincronizarQtdTotalComCores(tam);
+
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 6),
             child: Padding(
@@ -855,9 +876,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
 
                   // Quantidade total (editável ou somente leitura)
                   SizedBox(
-                    width: 110,
+                    width: 120,
                     child: TextFormField(
-                      initialValue: total.toString(),
+                      controller: qtdCtrl, // <-- agora usa controller
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         isDense: true,
@@ -868,22 +889,17 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                           vertical: 8,
                         ),
                       ),
-                      // Se quiser que editar esse campo distribua a quantidade nas cores,
-                      // escolha uma política. Abaixo: joga tudo em "SEM COR" se nenhuma cor marcada.
                       onChanged: (v) {
                         final novo = int.tryParse(v) ?? 0;
                         setState(() {
                           if (mapCores.isEmpty) {
                             mapCores['SEM COR'] = novo;
                           } else {
-                            // Estratégia simples: ajusta proporcionalmente mantendo distribuição
                             final somaAtual = somaCores(mapCores);
                             if (somaAtual <= 0) {
-                              // tudo em primeira cor
                               final primeira = mapCores.keys.first;
                               mapCores[primeira] = novo;
                             } else {
-                              // proporção
                               final fator = novo / somaAtual;
                               final chaves = mapCores.keys.toList();
                               int acumulado = 0;
@@ -891,27 +907,46 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                                 final k = chaves[i];
                                 int novaQtd = (mapCores[k]! * fator).round();
                                 if (i == chaves.length - 1) {
-                                  // corrige arredondamento na última
-                                  novaQtd = novo - acumulado;
+                                  novaQtd =
+                                      novo -
+                                      acumulado; // corrige arredondamento
                                 }
                                 mapCores[k] = novaQtd < 0 ? 0 : novaQtd;
                                 acumulado += mapCores[k]!;
                               }
                             }
                           }
+                          // garante que o campo permanece sincronizado
+                          _sincronizarQtdTotalComCores(tam);
                         });
                       },
                     ),
                   ),
 
-                  // Botão "Cores"
+                  // Botão "Cores" (MAIOR)
                   SizedBox(
-                    width: 90,
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.palette_outlined, size: 18),
+                    width: 160, // mais largo
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size(160, 44), // altura maior
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        // você pode ajustar o background se quiser:
+                        // backgroundColor: const Color(0xFFec407a),
+                      ),
+                      icon: const Icon(Icons.palette_outlined, size: 20),
                       label: const Text(
-                        'Cores',
+                        'Selecionar cor',
                         overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       onPressed: () async {
                         final atualizado = await _abrirSeletorCores(
@@ -922,9 +957,11 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                         );
                         if (atualizado != null) {
                           setState(() {
-                            // remove cores com 0
                             atualizado.removeWhere((_, qtd) => (qtd <= 0));
                             tamanhosCoresSelecionados[tam] = atualizado;
+
+                            // >>> ATUALIZA O TOTAL DO TAMANHO ASSIM QUE SELECIONAR AS CORES
+                            _sincronizarQtdTotalComCores(tam);
                           });
                         }
                       },
@@ -1002,6 +1039,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                           tamanhosCoresSelecionados[t] = Map<String, int>.from(
                             base,
                           );
+                          _sincronizarQtdTotalComCores(
+                            t,
+                          ); // mantém total em sincronia
                         }
                       });
                     },
@@ -1016,6 +1056,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                     tamanhosCoresSelecionados[t]!.removeWhere(
                       (_, qtd) => qtd <= 0,
                     );
+                    _sincronizarQtdTotalComCores(t);
                   }
                 });
               },
