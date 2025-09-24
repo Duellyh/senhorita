@@ -323,13 +323,6 @@ class _ProdutosViewState extends State<ProdutosView> {
                 style: const pw.TextStyle(fontSize: 6),
                 textAlign: pw.TextAlign.center,
               ),
-            if (corSelecionadaEtiqueta != null)
-              pw.Text(
-                'Cor: $corSelecionadaEtiqueta',
-                style: const pw.TextStyle(fontSize: 6),
-                textAlign: pw.TextAlign.center,
-              ),
-
             pw.Text(
               'R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
               style: const pw.TextStyle(fontSize: 6),

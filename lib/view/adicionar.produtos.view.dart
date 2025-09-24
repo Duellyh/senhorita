@@ -14,6 +14,10 @@ import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 import 'dart:math';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:barcode_widget/barcode_widget.dart';
 
 class AdicionarProdutosView extends StatefulWidget {
   final DocumentSnapshot? produto;
@@ -331,32 +335,27 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
         'loja': lojaSelecionada,
         'foto': fotoUrl ?? '',
         if (tipoUsuario !=
-            'funcionario') // ⬅️ Condicional para não salvar valorReal
+            'funcionario') // não salva valorReal para funcionário
           'valorReal': _converterParaDouble(valorRealController.text),
-        'precoVenda': _converterParaDouble(
-          precoVendaController.text,
-        ), // permanece obrigatório
+        'precoVenda': _converterParaDouble(precoVendaController.text),
         'categoria': categoria,
         'dataCadastro': FieldValue.serverTimestamp(),
         'horaCadastro': FieldValue.serverTimestamp(),
         if (semTamanho) ...{
           'quantidade': quantidadeTotal,
-          // opcional: limpar campos antigos
           'tamanhos': FieldValue.delete(),
           'tamanhosCores': FieldValue.delete(),
         } else ...{
           'quantidade': quantidadeTotal,
-          // mantém 'tamanhos' como somatório por tamanho (retrocompat)
+          // somatório por tamanho (retrocompat)
           'tamanhos': {
             for (final e in gradeCompacta.entries)
               e.key: e.value.values.fold<int>(0, (a, b) => a + b),
           },
-          // NOVO: grade Tamanho × Cor
+          // grade Tamanho × Cor
           'tamanhosCores': gradeCompacta,
         },
-
         'codigoBarras': codigoCurto,
-
         'busca': [
           nome.toLowerCase(),
           categoria.toLowerCase(),
@@ -364,9 +363,16 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
         ],
       };
 
+      // Salva (criação ou atualização)
       await docRef.set(produtoAtualizado);
 
+      // Pega o snapshot do documento salvo para passar ao diálogo de etiqueta
+      final snap = await docRef.get();
+
+      if (!context.mounted) return;
       Navigator.of(context).pop(); // fecha o loader
+
+      // Diálogo de sucesso + opção de imprimir etiqueta
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -376,9 +382,19 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           title: const Text('Sucesso'),
           content: const Text('O produto foi salvo com sucesso.'),
           actions: [
+            // Botão para imprimir etiqueta agora
             TextButton(
               onPressed: () {
-                Navigator.pop(context); // fecha o AlertDialog
+                Navigator.pop(context); // fecha este diálogo
+                // Abre o seu diálogo de etiqueta (tamanho/cor/impressora)
+                _mostrarEtiquetaDialog(context, snap);
+              },
+              child: const Text('Imprimir etiqueta'),
+            ),
+            // Mantém seu fluxo atual: ir para a lista
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context); // fecha este diálogo
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(builder: (_) => const ProdutosView()),
@@ -390,10 +406,12 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
         ),
       );
     } catch (e) {
-      Navigator.of(context).pop(); // fecha o loader
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erro ao salvar produto: $e')));
+      if (context.mounted) {
+        Navigator.of(context).pop(); // fecha o loader
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erro ao salvar produto: $e')));
+      }
     }
   }
 
@@ -783,6 +801,293 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           ],
         ),
       ),
+    );
+  }
+
+  void _mostrarEtiquetaDialog(BuildContext context, DocumentSnapshot produto) {
+    final data = produto.data() as Map<String, dynamic>;
+    final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
+    final tc = data['tamanhosCores'] as Map<String, dynamic>?;
+
+    final bool temGrade = tc != null && tc.isNotEmpty;
+    String? tamanhoSelecionado;
+    String? corSelecionadaEtiqueta;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        Printer? impressoraSelecionada;
+
+        return FutureBuilder<List<Printer>>(
+          future: Printing.listPrinters(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const AlertDialog(
+                content: SizedBox(
+                  height: 100,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              );
+            }
+
+            final impressoras = snapshot.data!;
+
+            // Seleciona automaticamente a impressora ELGIN L42PRO FULL, se disponível
+            if (impressoraSelecionada == null) {
+              impressoraSelecionada = impressoras.firstWhere(
+                (p) => p.name == 'ELGIN L42PRO ETIQUETA',
+                orElse: () => impressoras.first,
+              );
+            }
+
+            return StatefulBuilder(
+              builder: (ctx, setState) => AlertDialog(
+                title: const Text('Imprimir Etiqueta'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Produto: ${data['nome'] ?? '-'}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      if (temGrade) ...[
+                        DropdownButtonFormField<String>(
+                          value: tamanhoSelecionado,
+                          decoration: const InputDecoration(
+                            labelText: 'Selecione o Tamanho',
+                          ),
+                          items: tc.keys.map((tam) {
+                            return DropdownMenuItem(
+                              value: tam,
+                              child: Text(tam),
+                            );
+                          }).toList(),
+                          onChanged: (value) => setState(() {
+                            tamanhoSelecionado = value;
+                            corSelecionadaEtiqueta =
+                                null; // reset cor ao trocar tamanho
+                          }),
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: corSelecionadaEtiqueta,
+                          decoration: const InputDecoration(
+                            labelText: 'Selecione a Cor',
+                          ),
+                          items: (tamanhoSelecionado == null)
+                              ? const []
+                              : (tc[tamanhoSelecionado] as Map).keys
+                                    .map<DropdownMenuItem<String>>((cor) {
+                                      return DropdownMenuItem(
+                                        value: cor.toString(),
+                                        child: Text(cor.toString()),
+                                      );
+                                    })
+                                    .toList(),
+                          onChanged: (value) =>
+                              setState(() => corSelecionadaEtiqueta = value),
+                        ),
+                      ] else if (tamanhos != null && tamanhos.isNotEmpty) ...[
+                        DropdownButtonFormField<String>(
+                          value: tamanhoSelecionado,
+                          decoration: const InputDecoration(
+                            labelText: 'Selecione o Tamanho',
+                          ),
+                          items: tamanhos.keys.map((tam) {
+                            return DropdownMenuItem(
+                              value: tam,
+                              child: Text(tam),
+                            );
+                          }).toList(),
+                          onChanged: (value) =>
+                              setState(() => tamanhoSelecionado = value),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<Printer>(
+                        value: impressoraSelecionada,
+                        decoration: const InputDecoration(
+                          labelText: 'Selecionar Impressora',
+                        ),
+                        items: impressoras.map((printer) {
+                          return DropdownMenuItem(
+                            value: printer,
+                            child: Text(printer.name),
+                          );
+                        }).toList(),
+                        onChanged: (value) =>
+                            setState(() => impressoraSelecionada = value),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Preço: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: 200,
+                        height: 60,
+                        child: BarcodeWidget(
+                          barcode: Barcode.code128(),
+                          data: produto['codigoBarras'] ?? '',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancelar'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      if (temGrade) {
+                        if (tamanhoSelecionado == null ||
+                            corSelecionadaEtiqueta == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione tamanho e cor.'),
+                            ),
+                          );
+                          return;
+                        }
+                      } else if (tamanhos != null && tamanhos.isNotEmpty) {
+                        if (tamanhoSelecionado == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione um tamanho.'),
+                            ),
+                          );
+                          return;
+                        }
+                      }
+
+                      if (impressoraSelecionada == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Selecione uma impressora.'),
+                          ),
+                        );
+                        return;
+                      }
+
+                      Navigator.pop(ctx); // fecha o dialog de etiqueta
+                      _imprimirEtiquetaDupla(
+                        data,
+                        produto.id,
+                        tamanhoSelecionado,
+                        impressoraSelecionada!,
+                        corSelecionadaEtiqueta: temGrade
+                            ? corSelecionadaEtiqueta
+                            : null,
+                      ).then((_) {
+                        // depois que imprimir, redireciona para ProdutosView
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ProdutosView(),
+                          ),
+                        );
+                      });
+                    },
+                    child: const Text('Imprimir'),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _imprimirEtiquetaDupla(
+    Map<String, dynamic> data,
+    String id,
+    String? tamanhoSelecionado,
+    Printer impressoraSelecionada, {
+    String? corSelecionadaEtiqueta,
+  }) async {
+    final doc = pw.Document();
+
+    // Tamanho ajustado para caber duas etiquetas na largura de 90mm
+    const double etiquetaLargura = 36 * PdfPageFormat.mm;
+    const double etiquetaAltura = 25 * PdfPageFormat.mm;
+
+    final codigo = data['codigoBarras'] ?? '';
+
+    pw.Widget _etiqueta() {
+      return pw.Container(
+        width: etiquetaLargura,
+        height: etiquetaAltura,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: pw.Column(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+          crossAxisAlignment: pw.CrossAxisAlignment.center,
+          children: [
+            pw.Text(
+              (data['nome'] ?? 'Sem nome').toString().length > 20
+                  ? '${data['nome'].toString().substring(0, 20)}…'
+                  : data['nome'] ?? 'Sem nome',
+              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+              maxLines: 1,
+              textAlign: pw.TextAlign.center,
+            ),
+            if (tamanhoSelecionado != null)
+              pw.Text(
+                'Tam: $tamanhoSelecionado',
+                style: const pw.TextStyle(fontSize: 6),
+                textAlign: pw.TextAlign.center,
+              ),
+            pw.Text(
+              'R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
+              style: const pw.TextStyle(fontSize: 6),
+              textAlign: pw.TextAlign.center,
+            ),
+            pw.BarcodeWidget(
+              barcode: Barcode.code128(),
+              data: codigo,
+              width: 100,
+              height: 30,
+              drawText: false,
+            ),
+            pw.Text(
+              codigo,
+              style: const pw.TextStyle(fontSize: 6),
+              textAlign: pw.TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+
+    doc.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat(
+          90 * PdfPageFormat.mm, // largura total do papel
+          etiquetaAltura,
+        ),
+        margin: const pw.EdgeInsets.symmetric(horizontal: 4 * PdfPageFormat.mm),
+        build: (context) {
+          return pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.center,
+            children: [
+              _etiqueta(),
+              pw.SizedBox(width: 10), // espaço entre etiquetas
+              _etiqueta(),
+            ],
+          );
+        },
+      ),
+    );
+
+    // Enviar diretamente para a impressora
+    await Printing.directPrintPdf(
+      printer: impressoraSelecionada,
+      onLayout: (_) => doc.save(),
     );
   }
 
