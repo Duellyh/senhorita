@@ -356,11 +356,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           'tamanhosCores': gradeCompacta,
         },
         'codigoBarras': codigoCurto,
-        'busca': [
-          nome.toLowerCase(),
-          categoria.toLowerCase(),
-          codigoCurto.toLowerCase(),
-        ],
+        'busca': [nome.toLowerCase(), codigoCurto.toLowerCase()],
       };
 
       // Salva (criação ou atualização)
@@ -931,7 +927,7 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                         height: 60,
                         child: BarcodeWidget(
                           barcode: Barcode.code128(),
-                          data: produto['codigoBarras'] ?? '',
+                          data: (data['codigoBarras'] ?? '') as String,
                         ),
                       ),
                     ],
@@ -943,7 +939,8 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                     child: const Text('Cancelar'),
                   ),
                   TextButton(
-                    onPressed: () {
+                    onPressed: () async {
+                      // validações
                       if (temGrade) {
                         if (tamanhoSelecionado == null ||
                             corSelecionadaEtiqueta == null) {
@@ -974,25 +971,32 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                         return;
                       }
 
-                      Navigator.pop(ctx); // fecha o dialog de etiqueta
-                      _imprimirEtiquetaDupla(
-                        data,
-                        produto.id,
-                        tamanhoSelecionado,
-                        impressoraSelecionada!,
-                        corSelecionadaEtiqueta: temGrade
-                            ? corSelecionadaEtiqueta
-                            : null,
-                      ).then((_) {
-                        // depois que imprimir, redireciona para ProdutosView
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const ProdutosView(),
-                          ),
+                      // fecha o diálogo de etiqueta antes de imprimir
+                      Navigator.pop(ctx);
+
+                      try {
+                        await _imprimirEtiquetaDupla(
+                          data,
+                          produto.id,
+                          tamanhoSelecionado,
+                          impressoraSelecionada!,
+                          corSelecionadaEtiqueta: temGrade
+                              ? corSelecionadaEtiqueta
+                              : null,
                         );
-                      });
+                      } catch (_) {
+                        // mesmo que falhe a impressão, seguimos para a lista
+                      }
+
+                      if (!mounted) return;
+
+                      // redireciona para ProdutosView
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const ProdutosView()),
+                        (route) => false,
+                      );
                     },
+
                     child: const Text('Imprimir'),
                   ),
                 ],

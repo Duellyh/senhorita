@@ -480,7 +480,7 @@ class _ProdutosViewState extends State<ProdutosView> {
                 });
               },
               decoration: InputDecoration(
-                hintText: 'Buscar por nome, categoria, ID...',
+                hintText: 'Buscar por nome e ID',
                 prefixIcon: const Icon(Icons.search),
                 filled: true,
                 fillColor: Colors.white,
@@ -601,7 +601,7 @@ class _ProdutosViewState extends State<ProdutosView> {
             final d = doc.data() as Map<String, dynamic>;
             final codigo = (d['codigoBarras'] ?? doc.id).toString();
             final nome = (d['nome'] ?? '').toString();
-            final categoria = (d['categoria'] ?? '').toString();
+
             final cor = (d['cor'] ?? '')
                 .toString(); // cor “principal” (opcional)
             final loja = (d['loja'] ?? '').toString();
@@ -627,7 +627,7 @@ class _ProdutosViewState extends State<ProdutosView> {
                       .join(' ');
 
             return _norm(
-              '$nome $categoria $codigo $cor $loja $desc $tamanhos $variantesStr',
+              '$nome $codigo $cor $loja $desc $tamanhos $variantesStr',
             );
           }
 
