@@ -313,7 +313,17 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     }
 
     try {
-      final fotoUrl = await uploadImagem(docRef.id);
+      // ========== Upload da imagem (tolerante a ausência de imagem) ==========
+      String? fotoUrl;
+      try {
+        fotoUrl = await uploadImagem(
+          docRef.id,
+        ); // garanta que esta função retorna null se não houver imagem
+      } catch (_) {
+        // se falhar o upload, seguimos sem imagem
+        fotoUrl = null;
+      }
+
       final bool semTamanho =
           categoriaSelecionada != null &&
           categoriasSemTamanho.contains(categoriaSelecionada!);
@@ -328,41 +338,58 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
       final descricao = descricaoController.text.trim().toUpperCase();
       final categoria = categoriaSelecionada ?? 'Não definido';
 
-      final produtoAtualizado = {
+      // --------- Base do documento (sem campos que possam exigir delete) ---------
+      final Map<String, dynamic> base = {
         'nome': nome,
         'descricao': descricao,
         'cor': corSelecionada ?? '',
         'loja': lojaSelecionada,
         'foto': fotoUrl ?? '',
-        if (tipoUsuario !=
-            'funcionario') // não salva valorReal para funcionário
+        if (tipoUsuario != 'funcionario')
           'valorReal': _converterParaDouble(valorRealController.text),
         'precoVenda': _converterParaDouble(precoVendaController.text),
         'categoria': categoria,
         'dataCadastro': FieldValue.serverTimestamp(),
         'horaCadastro': FieldValue.serverTimestamp(),
-        if (semTamanho) ...{
-          'quantidade': quantidadeTotal,
-          'tamanhos': FieldValue.delete(),
-          'tamanhosCores': FieldValue.delete(),
-        } else ...{
-          'quantidade': quantidadeTotal,
-          // somatório por tamanho (retrocompat)
-          'tamanhos': {
-            for (final e in gradeCompacta.entries)
-              e.key: e.value.values.fold<int>(0, (a, b) => a + b),
-          },
-          // grade Tamanho × Cor
-          'tamanhosCores': gradeCompacta,
-        },
+        'quantidade': quantidadeTotal,
         'codigoBarras': codigoCurto,
         'busca': [nome.toLowerCase(), codigoCurto.toLowerCase()],
       };
 
-      // Salva (criação ou atualização)
-      await docRef.set(produtoAtualizado);
+      // --------- Campos de grade quando houver tamanho/cor ---------
+      final Map<String, dynamic> camposGradeQuandoTem = {
+        // somatório por tamanho (retrocompat)
+        'tamanhos': {
+          for (final e in gradeCompacta.entries)
+            e.key: e.value.values.fold<int>(0, (a, b) => a + b),
+        },
+        // grade Tamanho × Cor
+        'tamanhosCores': gradeCompacta,
+      };
 
-      // Pega o snapshot do documento salvo para passar ao diálogo de etiqueta
+      if (semTamanho) {
+        // PRODUTO SEM TAMANHO
+        if (novoProduto) {
+          // Em criação: não tente "deletar" campos; apenas NÃO os envie
+          await docRef.set(base);
+        } else {
+          // Em atualização: podemos apagar com merge ou update
+          // 1º: aplica base com merge (para não sobrescrever com nulls)
+          await docRef.set(base, SetOptions(merge: true));
+          // 2º: apaga os campos de grade corretamente
+          await docRef.update({
+            'tamanhos': FieldValue.delete(),
+            'tamanhosCores': FieldValue.delete(),
+          });
+        }
+      } else {
+        // PRODUTO COM TAMANHO/COR
+        final payload = <String, dynamic>{...base, ...camposGradeQuandoTem};
+        // Tanto em criação quanto atualização, set simples funciona
+        await docRef.set(payload);
+      }
+
+      // snapshot para etiqueta
       final snap = await docRef.get();
 
       if (!context.mounted) return;
@@ -378,16 +405,13 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
           title: const Text('Sucesso'),
           content: const Text('O produto foi salvo com sucesso.'),
           actions: [
-            // Botão para imprimir etiqueta agora
             TextButton(
               onPressed: () {
                 Navigator.pop(context); // fecha este diálogo
-                // Abre o seu diálogo de etiqueta (tamanho/cor/impressora)
                 _mostrarEtiquetaDialog(context, snap);
               },
               child: const Text('Imprimir etiqueta'),
             ),
-            // Mantém seu fluxo atual: ir para a lista
             TextButton(
               onPressed: () {
                 Navigator.pop(context); // fecha este diálogo
