@@ -149,6 +149,30 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     String _fmtData(DateTime? dt) =>
         dt == null ? '-' : DateFormat('dd/MM/yyyy').format(dt);
 
+    // ===================== NOVO: helpers forma de pagamento =====================
+    String _normalizarForma(String f) {
+      final s = f.toLowerCase().trim();
+      if (s.contains('pix')) return 'Pix';
+      if (s.contains('dinheiro')) return 'Dinheiro';
+      if (s.contains('débito') || s.contains('debito')) return 'Débito';
+      if (s.contains('crédito') || s.contains('credito')) return 'Crédito';
+      if (s.contains('cartao') || s.contains('cartão')) {
+        // se seu app diferencia "cartão débito" e "cartão crédito" no texto:
+        if (s.contains('debito') || s.contains('débito')) return 'Débito';
+        if (s.contains('credito') || s.contains('crédito')) return 'Crédito';
+        // fallback genérico para Cartão -> Crédito (ajuste se preferir)
+        return 'Crédito';
+      }
+      return f.isEmpty ? 'Outros' : f[0].toUpperCase() + f.substring(1);
+    }
+
+    void _addForma(Map<String, double> acc, String forma, double valor) {
+      if (valor <= 0) return;
+      final key = _normalizarForma(forma);
+      acc[key] = (acc[key] ?? 0) + valor;
+    }
+    // ===========================================================================
+
     final agora = DateTime.now();
     final inicioFiltro = dataInicio ?? DateTime(agora.year, agora.month, 1);
     final fimFiltro = (dataFim ?? DateTime.now()).add(
@@ -176,6 +200,43 @@ class _FinanceiroViewState extends State<FinanceiroView> {
         vendasAtivasDocs.add(d);
       }
     }
+    // ===================== NOVO: somatório por forma (valor) ====================
+    final Map<String, double> totalPorForma = {};
+    for (final doc in vendasAtivasDocs) {
+      final data = doc.data();
+
+      // Caso padrão: lista de pagamentos [{forma: 'Pix', valor: 100.0}, ...]
+      final pagamentos =
+          (data['pagamentos'] as List?)?.whereType<Map>() ?? const [];
+
+      if (pagamentos.isNotEmpty) {
+        for (final p in pagamentos) {
+          final forma = (p['forma'] ?? p['tipo'] ?? '').toString();
+          final valor = (p['valor'] ?? p['quantia'] ?? 0).toString();
+          final v =
+              double.tryParse(valor.replaceAll(',', '.')) ??
+              (p['valor'] as num?)?.toDouble() ??
+              0.0;
+          _addForma(totalPorForma, forma, v);
+        }
+        continue;
+      }
+
+      // Fallback (se não houver lista de pagamentos):
+      // Se existir apenas um campo 'formaPagamento' e o totalVenda,
+      // atribuimos TODO o valor àquela forma (ajuste se não desejar esse fallback).
+      final unicaForma = (data['formaPagamento'] ?? '').toString();
+      if (unicaForma.isNotEmpty) {
+        final totalVenda = (data['totalVenda'] ?? 0).toDouble();
+        _addForma(totalPorForma, unicaForma, totalVenda);
+        continue;
+      }
+
+      // Se só houver lista de nomes (sem valores individuais), não é possível
+      // repartir com precisão — então não somamos aqui.
+      // final formasLista = (data['formasPagamento'] as List?)?.cast<String>();
+    }
+    // ===========================================================================
 
     // Monta linhas da tabela principal (somente ativas)
     final linhasAtivas = vendasAtivasDocs.map((doc) {
@@ -251,6 +312,36 @@ class _FinanceiroViewState extends State<FinanceiroView> {
               'Valor Gasto Total: R\$ ${valorGastoTotal.toStringAsFixed(2)}',
             ),
             pw.Text('Lucro: R\$ ${lucro.toStringAsFixed(2)}'),
+            pw.SizedBox(height: 12),
+            if (totalPorForma.isNotEmpty) ...[
+              pw.Text(
+                'Totais por Forma de Pagamento:',
+                style: pw.TextStyle(
+                  fontSize: 14,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 6),
+
+              // Ordem fixa: Pix, Dinheiro, Débito, Crédito, depois outras
+              ...[
+                'Pix',
+                'Dinheiro',
+                'Débito',
+                'Crédito',
+                ...totalPorForma.keys
+                    .where(
+                      (k) =>
+                          !['Pix', 'Dinheiro', 'Débito', 'Crédito'].contains(k),
+                    )
+                    .toList(),
+              ].where((k) => (totalPorForma[k] ?? 0) > 0).map((k) {
+                final v = totalPorForma[k]!;
+                return pw.Text(
+                  'Total de vendas no ${k.toLowerCase()}: R\$ ${v.toStringAsFixed(2)}',
+                );
+              }),
+            ],
             pw.SizedBox(height: 12),
 
             pw.Divider(),
@@ -1191,7 +1282,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                     pct >= 0.06 || isTouched; // >=6% ou tocado
 
                 final String title = showTitle
-                    ? '${e.key}\n${e.value} (${(pct * 100).toStringAsFixed(0)}%)'
+                    ? '${e.key}\nR\$ ${(e.value).toStringAsFixed(2)}\n(${(pct * 100).toStringAsFixed(0)}%)'
                     : '';
 
                 return PieChartSectionData(
@@ -1235,7 +1326,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
             ),
             const SizedBox(width: 6),
             Text(
-              '${e.key}: ${e.value} (${pct.toStringAsFixed(0)}%)',
+              '${e.key}: R\$ ${(e.value).toStringAsFixed(2)} (${pct.toStringAsFixed(0)}%)',
               style: const TextStyle(fontSize: 12),
             ),
           ],
