@@ -1,10 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
+import 'package:senhorita/service/nfce_service.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
@@ -15,8 +16,6 @@ import 'package:senhorita/view/relatorios.view.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 
 class VendasView extends StatefulWidget {
   const VendasView({super.key});
@@ -67,6 +66,8 @@ class _VendasViewState extends State<VendasView> {
   List<String> funcionarios = [];
   double custoReal = 0.0; // Variável para armazenar o custo real do produto
   bool mostrarCampoFuncionario = false;
+  bool _processandoVenda = false;
+  final NfceService _nfceService = NfceService();
 
   @override
   void initState() {
@@ -363,48 +364,47 @@ class _VendasViewState extends State<VendasView> {
         return "33030010"; // Perfumes e águas-de-colônia
 
       default:
-        return "99999999"; // Outros (usar como fallback genérico)
+        return "62121000"; // Outros (usar como fallback genérico)
     }
   }
 
-  Future<String?> _obterTokenValido() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> _imprimirDanfeTermica(String danfeUrl) async {
+    try {
+      // 1) Baixar o PDF da DANFE pelo link da Webmania
+      final response = await http.get(Uri.parse(danfeUrl));
 
-    final tokenSalvo = prefs.getString("access_token");
-    final expiraEm = prefs.getInt("expira_em");
+      if (response.statusCode != 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Não foi possível baixar a DANFE (HTTP ${response.statusCode}).',
+            ),
+          ),
+        );
+        return;
+      }
 
-    final agora = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final pdfBytes = response.bodyBytes;
 
-    if (tokenSalvo != null && expiraEm != null && agora < expiraEm) {
-      // ✅ Token ainda válido
-      return tokenSalvo;
-    }
+      // 2) Buscar a impressora térmica pelo nome (igual você já faz)
+      final impressoras = await Printing.listPrinters();
+      final impressoraNota = impressoras.firstWhere(
+        (p) => p.name.toUpperCase() == 'IMPRESSORA NOTA',
+        orElse: () {
+          throw Exception('Impressora IMPRESSORA NOTA não encontrada');
+        },
+      );
 
-    // 🔄 Caso contrário, gera novo
-    final response = await http.post(
-      Uri.parse("https://auth.nuvemfiscal.com.br/oauth/token"),
-      headers: {"Content-Type": "application/x-www-form-urlencoded"},
-      body: {
-        "grant_type": "client_credentials",
-        "client_id": "BTvbSB2RnG56PUniqd0x",
-        "client_secret": "MZaGqkjQbFncM7ifIcYSrUrDkTU1v8cWg3yxbUIR",
-        "scope": "nfce",
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final novoToken = data["access_token"];
-      final expiraEmSegundos = (data["expires_in"] as num).toInt(); // força int
-      final validade = agora + expiraEmSegundos;
-
-      await prefs.setString("access_token", novoToken);
-      await prefs.setInt("expira_em", validade); // agora é int certinho
-
-      return novoToken;
-    } else {
-      print("Erro ao gerar token: ${response.body}");
-      return null;
+      // 3) Enviar o PDF da DANFE diretamente para a impressora
+      await Printing.directPrintPdf(
+        printer: impressoraNota,
+        onLayout: (format) async => pdfBytes,
+      );
+    } catch (e) {
+      debugPrint('Erro ao imprimir DANFE: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erro ao imprimir DANFE: $e')));
     }
   }
 
@@ -420,92 +420,173 @@ class _VendasViewState extends State<VendasView> {
       return;
     }
 
-    setState(() => carregandoBusca = true);
-
     try {
-      final token = await _obterTokenValido();
-      if (token == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Erro ao obter token de autenticação.")),
-        );
-        return;
-      }
+      // Total dos itens
+      final double totalProdutos = _calcularTotalGeral();
+      final double frete = valorFrete;
+      final double totalNota = totalProdutos + frete;
 
-      // Calcula valor total dinamicamente
-      final valorTotal = itensVendidos.fold<double>(0.0, (total, item) {
-        if (item.containsKey('tamanhos') &&
-            (item['tamanhos'] as Map).isNotEmpty) {
-          final tamanhos = Map<String, dynamic>.from(item['tamanhos']);
-          return total +
-              tamanhos.entries.fold<double>(
-                0.0,
-                (soma, e) =>
-                    soma + ((item['precoFinal'] ?? 0.0) * (e.value ?? 0)),
-              );
-        } else {
-          return total +
-              ((item['precoFinal'] ?? 0.0) * (item['quantidade'] ?? 1));
-        }
-      });
+      // ===== PRODUTOS (formato Webmania) =====
+      final List<Map<String, dynamic>> produtos = itensVendidos.map((item) {
+        final int qtd = (item['quantidade'] ?? 1) as int;
+        final double precoUnit = (item['precoFinal'] ?? 0.0 as num).toDouble();
+        final double subtotal = precoUnit * qtd;
 
-      // Monta a lista de itens (det) dinamicamente
-      final List<Map<String, dynamic>> det = [];
-
-      for (var item in itensVendidos) {
-        final codigoBarras = item['codigoBarras']?.toString() ?? 'SEM GTIN';
-        final valorUnitario = (item['precoFinal'] ?? 0.0).toDouble();
-        final categoria = item['categoria'] ?? 'OUTROS';
+        final categoria = (item['categoria'] ?? '').toString();
         final ncm = _definirNCM(categoria);
 
-        if (item.containsKey('tamanhos') &&
-            (item['tamanhos'] as Map).isNotEmpty) {
-          final tamanhos = Map<String, dynamic>.from(item['tamanhos']);
-          tamanhos.forEach((tamanho, qtd) {
-            if ((qtd ?? 0) > 0) {
-              det.add({
-                "nItem": (det.length + 1).toString(),
-                "prod": {
-                  "cProd": "${item['produtoId'] ?? ''}-$tamanho",
-                  "cEAN": codigoBarras,
-                  "xProd": "${item['produtoNome'] ?? ''} Tam: $tamanho",
-                  "NCM": ncm,
-                  "CFOP": "5102",
-                  "uCom": "UN",
-                  "qCom": qtd.toString(),
-                  "vUnCom": valorUnitario.toStringAsFixed(2),
-                  "vProd": (valorUnitario * qtd).toStringAsFixed(2),
-                  "cEANTrib": codigoBarras,
-                  "uTrib": "UN",
-                  "qTrib": qtd.toString(),
-                  "vUnTrib": valorUnitario.toStringAsFixed(2),
-                  "indTot": "1",
-                },
-                "imposto": {
-                  "ICMS": {
-                    "ICMSSN102": {"orig": 0, "CSOSN": "102"},
-                  },
-                },
-              });
-            }
-          });
+        return {
+          "nome": item['produtoNome'] ?? 'Produto',
+          "ncm": ncm,
+          "cest": "2806500", // depois podemos refinar
+          "quantidade": qtd,
+          "unidade": "UN",
+          "peso": "0.000",
+          "origem": 0,
+          "subtotal": double.parse(subtotal.toStringAsFixed(2)),
+          "total": double.parse(subtotal.toStringAsFixed(2)),
+          "classe_imposto": "REF408415301", // sua classe criada no painel
+        };
+      }).toList();
+
+      // ===== CLIENTE =====
+      // Como na NFC-e o consumidor pode ser não identificado,
+      // se você não tiver CPF salvo, mandamos só o indicador:
+      final Map<String, dynamic> clienteJson;
+      if (clienteSelecionado != null &&
+          (clienteSelecionado!['cpf'] ?? '').toString().isNotEmpty) {
+        clienteJson = {
+          "cpf": (clienteSelecionado!['cpf'] ?? '').toString().replaceAll(
+            RegExp(r'\D'),
+            '',
+          ),
+          "nome_completo": clienteSelecionado!['nome'] ?? 'Consumidor',
+        };
+      } else {
+        clienteJson = {
+          "indicador_inscricao_estadual":
+              9, // consumidor final não contribuinte
+        };
+      }
+
+      // ===== PEDIDO (pagamento, frete, total) =====
+      final Map<String, dynamic> pedidoJson = {
+        "pagamento": 1, // 1 = pagamento à vista (básico p/ começar)
+        "presenca": 1, // 1 = operação presencial
+        "modalidade_frete": 9, // 9 = sem frete / por conta do destinatário
+        "frete": double.parse(frete.toStringAsFixed(2)),
+        "desconto": 0,
+        "total": double.parse(totalNota.toStringAsFixed(2)),
+      };
+
+      // ===== CORPO FINAL (formato Webmania) =====
+      final Map<String, dynamic> body = {
+        "operacao": 1, // 1 = saída
+        "natureza_operacao": "Venda ao consumidor",
+        "modelo": 2, // 2 = NFC-e
+        "finalidade": 1, // 1 = normal
+        "ambiente": 1, // 1 = produção
+        "cliente": clienteJson,
+        "produtos": produtos,
+        "pedido": pedidoJson,
+      };
+
+      // Envia para o backend (que chama a Webmania)
+      final resultado = await _nfceService.emitirNfce(body);
+
+      // Esperado algo como { ok: true, retorno: { status: 'aprovado', ... } }
+      final retorno =
+          resultado['retorno'] ?? resultado['resultado'] ?? resultado;
+
+      if (resultado['ok'] == true &&
+          retorno is Map &&
+          retorno['status'] == 'aprovado') {
+        debugPrint('✅ NFC-e aprovada. Chave: ${retorno['chave']}');
+        debugPrint('DANFE: ${retorno['danfe']}');
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('NFC-e emitida com sucesso!')),
+        );
+
+        // 👇 aqui vem a mágica: imprimir a DANFE automaticamente
+        final danfeUrl = retorno['danfe'] as String?;
+        if (danfeUrl != null && danfeUrl.isNotEmpty) {
+          await _imprimirDanfeTermica(danfeUrl);
         } else {
-          final quantidadeVendida = item['quantidade'] ?? 1;
-          det.add({
-            "nItem": (det.length + 1).toString(),
+          debugPrint('⚠ DANFE não retornada pela API.');
+        }
+      } else {
+        debugPrint('❌ Erro ao emitir NFC-e: $resultado');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao emitir NFC-e: $resultado')),
+        );
+      }
+    } catch (e, stack) {
+      debugPrint('❌ Erro ao emitir NFC-e: $e');
+      debugPrint(stack.toString());
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erro ao emitir NFC-e: $e')));
+    }
+  }
+
+  Map<String, dynamic> montarNfce(
+    List<Map<String, dynamic>> itens,
+    double frete,
+    List<Map<String, dynamic>> pagamentos,
+  ) {
+    return {
+      "infNFe": {
+        "versao": "4.00",
+        "ide": {
+          "cUF": 15,
+          "natOp": "Venda ao consumidor",
+          "serie": 2,
+          "nNF": DateTime.now().millisecondsSinceEpoch % 999999,
+          "dhEmi": DateTime.now().toIso8601String(),
+          "tpNF": 1,
+          "idDest": 1,
+          "cMunFG": "1500107",
+          "tpImp": 4,
+          "tpEmis": 1,
+          "finNFe": 1,
+          "indFinal": 1,
+          "indPres": 1,
+          "procEmi": 0,
+          "verProc": "1.0",
+        },
+        "emit": {
+          "CNPJ": "47179855000195",
+          "xNome": "SENHORITA CINTA MODELADORAS LTDA",
+          "xFant": "SENHORITA CINTA MODELADORAS",
+          "enderEmit": {
+            "xLgr": "Rua Barao do Rio Branco",
+            "nro": "1836",
+            "xBairro": "Centro",
+            "cMun": "1500107",
+            "xMun": "Abaetetuba",
+            "UF": "PA",
+            "CEP": "68440000",
+            "Fone": "9181480881",
+          },
+          "IE": "158462106",
+          "CRT": 1,
+        },
+        "det": itens.map((item) {
+          final quantidade = item['quantidade'] ?? 1;
+          final preco = item['precoFinal'] ?? 0.0;
+
+          return {
+            "nItem": itens.indexOf(item) + 1,
             "prod": {
-              "cProd": item['produtoId'] ?? '',
-              "cEAN": codigoBarras,
-              "xProd": item['produtoNome'] ?? '',
-              "NCM": ncm,
+              "cProd": item['produtoId'],
+              "xProd": item['produtoNome'],
+              "NCM": "62121000",
               "CFOP": "5102",
               "uCom": "UN",
-              "qCom": quantidadeVendida.toString(),
-              "vUnCom": valorUnitario.toStringAsFixed(2),
-              "vProd": (valorUnitario * quantidadeVendida).toStringAsFixed(2),
-              "cEANTrib": codigoBarras,
-              "uTrib": "UN",
-              "qTrib": quantidadeVendida.toString(),
-              "vUnTrib": valorUnitario.toStringAsFixed(2),
+              "qCom": quantidade.toString(),
+              "vUnCom": preco.toStringAsFixed(2),
+              "vProd": (preco * quantidade).toStringAsFixed(2),
               "indTot": "1",
             },
             "imposto": {
@@ -513,152 +594,32 @@ class _VendasViewState extends State<VendasView> {
                 "ICMSSN102": {"orig": 0, "CSOSN": "102"},
               },
             },
-          });
-        }
-      }
-
-      // Garante ao menos 1 item se det ficar vazio
-      if (det.isEmpty) {
-        det.add({
-          "nItem": 1,
-          "prod": {
-            "cProd": "000",
-            "cEAN": "SEM GTIN",
-            "xProd": "Produto genérico",
-            "NCM": "99999999",
-            "CFOP": "5102",
-            "uCom": "UN",
-            "qCom": 1,
-            "vUnCom": 0.01,
-            "vProd": 0.01,
-            "cEANTrib": "SEM GTIN",
-            "uTrib": "UN",
-            "qTrib": 1,
-            "vUnTrib": 0.01,
-            "indTot": 1,
-          },
-          "imposto": {
-            "ICMS": {
-              "ICMSSN102": {"orig": 0, "CSOSN": "102"},
-            },
-          },
-        });
-      }
-
-      // Garante ao menos 1 pagamento
-      if (pagamentos.isEmpty) {
-        pagamentos.add({
-          "forma": "01",
-          "valor": valorTotal > 0 ? valorTotal : 0.01,
-        });
-      }
-
-      final nfceData = {
-        "infNFe": {
-          "versao": "4.00",
-          "ide": {
-            "cUF": 15,
-            "natOp": "Venda ao consumidor",
-            "serie": 1,
-            "nNF": DateTime.now().millisecondsSinceEpoch % 999999,
-            "dhEmi": DateTime.now().toIso8601String(),
-            "tpNF": 1,
-            "idDest": 1,
-            "cMunFG": "1500107",
-            "tpImp": 4,
-            "tpEmis": 1,
-            "finNFe": 1,
-            "indFinal": 1,
-            "indPres": 1,
-            "procEmi": 0,
-            "verProc": "1.0",
-          },
-          "emit": {
-            "CNPJ": "47179855000195",
-            "xNome": "SENHORITA CINTA MODELADORAS LTDA",
-            "xFant": "SENHORITA CINTA MODELADORAS",
-            "enderEmit": {
-              "xLgr": "Rua Barao do Rio Branco",
-              "nro": "1836",
-              "xBairro": "Centro",
-              "cMun": "1500107",
-              "xMun": "Abaetetuba",
-              "UF": "PA",
-              "CEP": "68440000",
-              "Fone": "9181480881",
-            },
-            "IE": "158462106",
-            "CRT": 1,
-          },
-          "dest": clienteSelecionado != null
-              ? {
-                  "CPF": clienteSelecionado!["cpf"],
-                  "xNome": clienteSelecionado!["nome"],
-                }
-              : null,
-          "det": det,
-          "total": {
-            "ICMSTot": {
-              "vProd": valorTotal,
-              "vFrete": valorFrete,
-              "vNF": valorTotal + valorFrete,
-              "vICMS": 0.0,
-              "vICMSDeson": 0.0,
-              "vFCP": 0.0,
-              "vBC": 0.0,
-              "vBCST": 0.0,
-              "vST": 0.0,
-              "vFCPST": 0.0,
-              "vFCPSTRet": 0.0,
-              "vSeg": 0.0,
-              "vDesc": 0.0,
-              "vII": 0.0,
-              "vIPI": 0.0,
-              "vIPIDevol": 0.0,
-              "vPIS": 0.0,
-              "vCOFINS": 0.0,
-              "vOutro": 0.0,
-            },
-          },
-          "transp": {"modFrete": 9},
-          "pag": {
-            "detPag": pagamentos.map((p) {
-              return {"tPag": p['forma'] ?? '01', "vPag": (p['valor'] ?? 0.0)};
-            }).toList(),
+          };
+        }).toList(),
+        "total": {
+          "ICMSTot": {
+            "vProd": itens.fold(
+              0.0,
+              (total, item) =>
+                  total + (item['precoFinal'] * item['quantidade']),
+            ),
+            "vNF":
+                itens.fold(
+                  0.0,
+                  (total, item) =>
+                      total + (item['precoFinal'] * item['quantidade']),
+                ) +
+                frete,
           },
         },
-        "ambiente": "producao",
-      };
-
-      final response = await http.post(
-        Uri.parse("https://api.nuvemfiscal.com.br/nfce"),
-        headers: {
-          "Authorization": "Bearer $token",
-          "Content-Type": "application/json",
+        "pag": {
+          "detPag": pagamentos
+              .map((p) => {"tPag": "01", "vPag": p['valor']})
+              .toList(),
         },
-        body: jsonEncode(nfceData),
-      );
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        print("NFC-e emitida com sucesso: ${data['chave']}");
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("NFC-e emitida com sucesso!")),
-        );
-      } else {
-        print("Erro NFC-e: ${response.body}");
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Erro ao emitir NFC-e: ${response.body}")),
-        );
-      }
-    } catch (e) {
-      print("Erro ao emitir NFC-e: $e");
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Erro ao emitir NFC-e: $e")));
-    } finally {
-      setState(() => carregandoBusca = false);
-    }
+      },
+      "ambiente": "producao",
+    };
   }
 
   Future<void> _imprimirNota(
@@ -895,6 +856,10 @@ class _VendasViewState extends State<VendasView> {
   }
 
   Future<void> realizarVenda() async {
+    // trava: se já estiver processando, ignora novas chamadas
+    if (_processandoVenda) return;
+    _processandoVenda = true;
+
     final totalVenda = _calcularTotalGeral();
     final totalPago = _calcularTotalPago();
 
@@ -902,6 +867,7 @@ class _VendasViewState extends State<VendasView> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Adicione ao menos um produto')),
       );
+      _processandoVenda = false;
       return;
     }
 
@@ -913,6 +879,7 @@ class _VendasViewState extends State<VendasView> {
           ),
         ),
       );
+      _processandoVenda = false;
       return;
     }
 
@@ -953,7 +920,7 @@ class _VendasViewState extends State<VendasView> {
           .toSet()
           .toList();
 
-      // 2) Registrar a venda
+      // 2) Registrar a venda (apenas 1x)
       await firestore.collection('vendas').add({
         'produtoId': produtoEncontrado?['docId'] ?? produtoEncontrado?['id'],
         'produtoNome': produtoEncontrado?['nome'],
@@ -1002,7 +969,6 @@ class _VendasViewState extends State<VendasView> {
       for (final item in itensComValorReal) {
         final String? produtoDocId = item['docId'] as String?;
         if (produtoDocId == null || produtoDocId.isEmpty) {
-          // fallback opcional: tente resolver via codigoBarras
           final cb = item['produtoId'];
           final q = await firestore
               .collection('produtos')
@@ -1010,7 +976,7 @@ class _VendasViewState extends State<VendasView> {
               .limit(1)
               .get();
           if (q.docs.isEmpty) continue;
-          // use o docId encontrado
+
           final produtoRef = q.docs.first.reference;
 
           final tamanho = (item['tamanho'] ?? '') as String;
@@ -1103,6 +1069,8 @@ class _VendasViewState extends State<VendasView> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Erro ao registrar a venda: $e')));
+    } finally {
+      _processandoVenda = false;
     }
   }
 
@@ -1900,16 +1868,33 @@ class _VendasViewState extends State<VendasView> {
 
               const SizedBox(height: 20),
               ElevatedButton.icon(
-                onPressed: () {
-                  // Aguarda um frame para garantir que o campo seja renderizado antes da validação
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (_formKey.currentState!.validate()) {
-                      realizarVenda();
-                    }
-                  });
-                },
-                icon: const Icon(Icons.shopping_cart_checkout),
-                label: const Text('Finalizar Venda'),
+                onPressed: _processandoVenda
+                    ? null // 🔒 Desabilita o botão enquanto processa
+                    : () {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (_formKey.currentState!.validate()) {
+                            realizarVenda();
+                          }
+                        });
+                      },
+                icon: _processandoVenda
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.shopping_cart_checkout),
+
+                label: _processandoVenda
+                    ? const Text(
+                        'Processando...',
+                        style: TextStyle(color: Colors.white),
+                      )
+                    : const Text('Finalizar Venda'),
+
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color.fromARGB(255, 196, 50, 99),
                   foregroundColor: Colors.white,

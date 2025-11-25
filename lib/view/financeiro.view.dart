@@ -149,7 +149,20 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     String _fmtData(DateTime? dt) =>
         dt == null ? '-' : DateFormat('dd/MM/yyyy').format(dt);
 
-    // ===================== NOVO: helpers forma de pagamento =====================
+    // ===================== NOVO: helper de moeda BR ============================
+    final NumberFormat _brl = NumberFormat.currency(
+      locale: 'pt_BR',
+      symbol: 'R\$',
+      decimalDigits: 2,
+    );
+
+    String fmtBRL(num? v) {
+      final valor = (v ?? 0).toDouble();
+      return _brl.format(valor);
+    }
+    // ==========================================================================
+
+    // ===================== NOVO: helpers forma de pagamento ====================
     String _normalizarForma(String f) {
       final s = f.toLowerCase().trim();
       if (s.contains('pix')) return 'Pix';
@@ -171,7 +184,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
       final key = _normalizarForma(forma);
       acc[key] = (acc[key] ?? 0) + valor;
     }
-    // ===========================================================================
+    // ==========================================================================
 
     final agora = DateTime.now();
     final inicioFiltro = dataInicio ?? DateTime(agora.year, agora.month, 1);
@@ -200,7 +213,8 @@ class _FinanceiroViewState extends State<FinanceiroView> {
         vendasAtivasDocs.add(d);
       }
     }
-    // ===================== NOVO: somatório por forma (valor) ====================
+
+    // ===================== somatório por forma (valor) =========================
     final Map<String, double> totalPorForma = {};
     for (final doc in vendasAtivasDocs) {
       final data = doc.data();
@@ -212,9 +226,9 @@ class _FinanceiroViewState extends State<FinanceiroView> {
       if (pagamentos.isNotEmpty) {
         for (final p in pagamentos) {
           final forma = (p['forma'] ?? p['tipo'] ?? '').toString();
-          final valor = (p['valor'] ?? p['quantia'] ?? 0).toString();
+          final valorStr = (p['valor'] ?? p['quantia'] ?? 0).toString();
           final v =
-              double.tryParse(valor.replaceAll(',', '.')) ??
+              double.tryParse(valorStr.replaceAll(',', '.')) ??
               (p['valor'] as num?)?.toDouble() ??
               0.0;
           _addForma(totalPorForma, forma, v);
@@ -222,21 +236,15 @@ class _FinanceiroViewState extends State<FinanceiroView> {
         continue;
       }
 
-      // Fallback (se não houver lista de pagamentos):
-      // Se existir apenas um campo 'formaPagamento' e o totalVenda,
-      // atribuimos TODO o valor àquela forma (ajuste se não desejar esse fallback).
+      // Fallback (se não houver lista de pagamentos)
       final unicaForma = (data['formaPagamento'] ?? '').toString();
       if (unicaForma.isNotEmpty) {
         final totalVenda = (data['totalVenda'] ?? 0).toDouble();
         _addForma(totalPorForma, unicaForma, totalVenda);
         continue;
       }
-
-      // Se só houver lista de nomes (sem valores individuais), não é possível
-      // repartir com precisão — então não somamos aqui.
-      // final formasLista = (data['formasPagamento'] as List?)?.cast<String>();
     }
-    // ===========================================================================
+    // ==========================================================================
 
     // Monta linhas da tabela principal (somente ativas)
     final linhasAtivas = vendasAtivasDocs.map((doc) {
@@ -254,7 +262,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
 
       return [
         DateFormat('dd/MM/yyyy').format(dataVenda),
-        'R\$ ${valor.toStringAsFixed(2)}',
+        fmtBRL(valor),
         formas,
         funcionario,
       ];
@@ -278,7 +286,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
 
       return [
         _fmtData(dataVenda),
-        'R\$ ${valor.toStringAsFixed(2)}',
+        fmtBRL(valor),
         funcionario.toString(),
         cliente.toString(),
         motivo.isEmpty ? '-' : motivo,
@@ -301,18 +309,14 @@ class _FinanceiroViewState extends State<FinanceiroView> {
               'Período: ${DateFormat('dd/MM/yyyy').format(inicioFiltro)} - ${DateFormat('dd/MM/yyyy').format(fimFiltro)}',
             ),
             pw.SizedBox(height: 8),
-            // Observação: estes KPIs vêm do estado atual; se já excluem canceladas,
-            // ótimo. Se não, você pode recalcular aqui usando 'vendasAtivasDocs'.
+
             pw.Text('Total de Vendas: $totalVendas'),
-            pw.Text(
-              'Total de Vendas no Período: R\$ ${totalMes.toStringAsFixed(2)}',
-            ),
-            pw.Text('Total de Hoje: R\$ ${totalHoje.toStringAsFixed(2)}'),
-            pw.Text(
-              'Valor Gasto Total: R\$ ${valorGastoTotal.toStringAsFixed(2)}',
-            ),
-            pw.Text('Lucro: R\$ ${lucro.toStringAsFixed(2)}'),
+            pw.Text('Total de Vendas no Período: ${fmtBRL(totalMes)}'),
+            pw.Text('Total de Hoje: ${fmtBRL(totalHoje)}'),
+            pw.Text('Valor Gasto Total: ${fmtBRL(valorGastoTotal)}'),
+            pw.Text('Lucro: ${fmtBRL(lucro)}'),
             pw.SizedBox(height: 12),
+
             if (totalPorForma.isNotEmpty) ...[
               pw.Text(
                 'Totais por Forma de Pagamento:',
@@ -338,12 +342,12 @@ class _FinanceiroViewState extends State<FinanceiroView> {
               ].where((k) => (totalPorForma[k] ?? 0) > 0).map((k) {
                 final v = totalPorForma[k]!;
                 return pw.Text(
-                  'Total de vendas no ${k.toLowerCase()}: R\$ ${v.toStringAsFixed(2)}',
+                  'Total de vendas no ${k.toLowerCase()}: ${fmtBRL(v)}',
                 );
               }),
             ],
-            pw.SizedBox(height: 12),
 
+            pw.SizedBox(height: 12),
             pw.Divider(),
 
             pw.Text(
@@ -383,7 +387,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
             pw.Table.fromTextArray(
               headers: ['Funcionário', 'Valor Total'],
               data: vendasPorFuncionario.entries
-                  .map((e) => [e.key, 'R\$ ${e.value.toStringAsFixed(2)}'])
+                  .map((e) => [e.key, fmtBRL(e.value)])
                   .toList(),
             ),
 
@@ -397,7 +401,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
             pw.Table.fromTextArray(
               headers: ['Categoria', 'Valor Total'],
               data: vendasPorCategoria.entries
-                  .map((e) => [e.key, 'R\$ ${e.value.toStringAsFixed(2)}'])
+                  .map((e) => [e.key, fmtBRL(e.value)])
                   .toList(),
             ),
 
@@ -411,7 +415,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
             pw.Table.fromTextArray(
               headers: ['Dia', 'Valor'],
               data: vendasPorDia.entries
-                  .map((e) => [e.key, 'R\$ ${e.value.toStringAsFixed(2)}'])
+                  .map((e) => [e.key, fmtBRL(e.value)])
                   .toList(),
             ),
 
@@ -426,7 +430,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                 ),
               ),
 
-            // ========= NOVA SEÇÃO: VENDAS CANCELADAS =========
+            // ========= VENDAS CANCELADAS =========
             if (canceladasDocs.isNotEmpty) ...[
               pw.SizedBox(height: 24),
               pw.Divider(),
@@ -439,9 +443,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
               ),
               pw.SizedBox(height: 6),
               pw.Text('Quantidade: ${canceladasDocs.length}'),
-              pw.Text(
-                'Valor Total Cancelado: R\$ ${valorCancelado.toStringAsFixed(2)}',
-              ),
+              pw.Text('Valor Total Cancelado: ${fmtBRL(valorCancelado)}'),
               pw.SizedBox(height: 8),
               pw.Table.fromTextArray(
                 headers: ['Data', 'Valor', 'Funcionário', 'Cliente', 'Motivo'],
