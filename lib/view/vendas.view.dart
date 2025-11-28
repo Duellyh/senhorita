@@ -16,6 +16,7 @@ import 'package:senhorita/view/relatorios.view.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
+import 'dart:typed_data';
 
 class VendasView extends StatefulWidget {
   const VendasView({super.key});
@@ -371,7 +372,7 @@ class _VendasViewState extends State<VendasView> {
   Future<void> _imprimirDanfeTermica(String danfeUrl) async {
     try {
       // 1) Baixar o PDF da DANFE pelo link da Webmania
-      final response = await http.get(Uri.parse(danfeUrl));
+      final response = await http.get(Uri.parse(danfeUrl.trim()));
 
       if (response.statusCode != 200) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -384,9 +385,20 @@ class _VendasViewState extends State<VendasView> {
         return;
       }
 
-      final pdfBytes = response.bodyBytes;
+      final Uint8List pdfBytes = response.bodyBytes;
 
-      // 2) Buscar a impressora térmica pelo nome (igual você já faz)
+      // (opcional) checar se realmente é um PDF
+      if (pdfBytes.length < 4 ||
+          String.fromCharCodes(pdfBytes.sublist(0, 4)) != '%PDF') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('O arquivo da DANFE não é um PDF válido.'),
+          ),
+        );
+        return;
+      }
+
+      // 2) Buscar a impressora térmica pelo nome (mesmo da nota de pagamento)
       final impressoras = await Printing.listPrinters();
       final impressoraNota = impressoras.firstWhere(
         (p) => p.name.toUpperCase() == 'IMPRESSORA NOTA',
@@ -395,10 +407,33 @@ class _VendasViewState extends State<VendasView> {
         },
       );
 
-      // 3) Enviar o PDF da DANFE diretamente para a impressora
+      // 3) Converter o PDF da DANFE em imagens e remontar num PDF 58mm
+      final pw.Document docTermico = pw.Document();
+      final double largura58mm = 58 * PdfPageFormat.mm;
+
+      // Printing.raster devolve um stream de páginas rasterizadas
+      await for (final page in Printing.raster(pdfBytes, dpi: 203)) {
+        // 203 dpi ~ térmica
+        final pngBytes = await page.toPng(); // Uint8List
+        final image = pw.MemoryImage(pngBytes);
+
+        // Calcula proporção para caber na largura de 58mm
+        final double scale = largura58mm / page.width;
+        final double alturaPagina = page.height * scale;
+
+        docTermico.addPage(
+          pw.Page(
+            pageFormat: PdfPageFormat(largura58mm, alturaPagina),
+            margin: pw.EdgeInsets.zero,
+            build: (_) => pw.Center(child: pw.Image(image, width: largura58mm)),
+          ),
+        );
+      }
+
+      // 4) Enviar o novo PDF (já no formato da térmica) direto para a impressora
       await Printing.directPrintPdf(
         printer: impressoraNota,
-        onLayout: (format) async => pdfBytes,
+        onLayout: (format) async => docTermico.save(),
       );
     } catch (e) {
       debugPrint('Erro ao imprimir DANFE: $e');
