@@ -314,18 +314,25 @@ class _VendasViewState extends State<VendasView> {
               Navigator.pop(context);
 
               if (tipoNotaSelecionada == 'fiscal') {
-                _emitirNotaFiscal(itensVendidos, valorFrete, pagamentos);
+                // 👉 passa CÓPIAS + totalPago do resumo
+                _emitirNotaFiscal(
+                  List<Map<String, dynamic>>.from(itensVendidos),
+                  valorFrete,
+                  List<Map<String, dynamic>>.from(pagamentos),
+                  totalPago,
+                );
               } else {
                 _imprimirNota(
-                  List.from(itensVendidos),
+                  List<Map<String, dynamic>>.from(itensVendidos),
                   valorFrete,
-                  List.from(pagamentos),
-                  _calcularTotalPago(),
+                  List<Map<String, dynamic>>.from(pagamentos),
+                  totalPago,
                 );
               }
             },
             child: const Text('🖨️ Imprimir Nota'),
           ),
+
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('❌ Não Imprimir'),
@@ -387,18 +394,7 @@ class _VendasViewState extends State<VendasView> {
 
       final Uint8List pdfBytes = response.bodyBytes;
 
-      // (opcional) checar se realmente é um PDF
-      if (pdfBytes.length < 4 ||
-          String.fromCharCodes(pdfBytes.sublist(0, 4)) != '%PDF') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('O arquivo da DANFE não é um PDF válido.'),
-          ),
-        );
-        return;
-      }
-
-      // 2) Buscar a impressora térmica pelo nome (mesmo da nota de pagamento)
+      // 2) Buscar a impressora térmica pelo MESMO nome da nota de pagamento
       final impressoras = await Printing.listPrinters();
       final impressoraNota = impressoras.firstWhere(
         (p) => p.name.toUpperCase() == 'IMPRESSORA NOTA',
@@ -407,34 +403,61 @@ class _VendasViewState extends State<VendasView> {
         },
       );
 
-      // 3) Converter o PDF da DANFE em imagens e remontar num PDF 58mm
+      // 3) Tentativa 1: rasterizar e remontar PDF 58mm
       final pw.Document docTermico = pw.Document();
       final double largura58mm = 58 * PdfPageFormat.mm;
 
-      // Printing.raster devolve um stream de páginas rasterizadas
-      await for (final page in Printing.raster(pdfBytes, dpi: 203)) {
-        // 203 dpi ~ térmica
-        final pngBytes = await page.toPng(); // Uint8List
-        final image = pw.MemoryImage(pngBytes);
+      bool rasterizou = false;
 
-        // Calcula proporção para caber na largura de 58mm
-        final double scale = largura58mm / page.width;
-        final double alturaPagina = page.height * scale;
+      try {
+        await for (final page in Printing.raster(
+          pdfBytes,
+          dpi: 203, // resolução típica da térmica
+        )) {
+          rasterizou = true;
 
-        docTermico.addPage(
-          pw.Page(
-            pageFormat: PdfPageFormat(largura58mm, alturaPagina),
-            margin: pw.EdgeInsets.zero,
-            build: (_) => pw.Center(child: pw.Image(image, width: largura58mm)),
-          ),
-        );
+          final pngBytes = await page.toPng();
+          final image = pw.MemoryImage(pngBytes);
+
+          final double scale = largura58mm / page.width;
+          final double alturaPagina = page.height * scale;
+
+          docTermico.addPage(
+            pw.Page(
+              pageFormat: PdfPageFormat(largura58mm, alturaPagina),
+              margin: pw.EdgeInsets.zero,
+              build: (_) =>
+                  pw.Center(child: pw.Image(image, width: largura58mm)),
+            ),
+          );
+        }
+      } on UnimplementedError catch (e) {
+        // Plataforma não suporta raster -> vamos pro plano B
+        debugPrint('Raster não implementado nesta plataforma: $e');
+        rasterizou = false;
+      } catch (e) {
+        // Outro erro ao tentar rasterizar
+        debugPrint('Falha ao rasterizar DANFE: $e');
+        rasterizou = false;
       }
 
-      // 4) Enviar o novo PDF (já no formato da térmica) direto para a impressora
-      await Printing.directPrintPdf(
-        printer: impressoraNota,
-        onLayout: (format) async => docTermico.save(),
-      );
+      if (rasterizou) {
+        // 4A) Conseguimos rasterizar -> manda o PDF 58mm para a impressora
+        await Printing.directPrintPdf(
+          printer: impressoraNota,
+          onLayout: (format) async => docTermico.save(),
+        );
+      } else {
+        // 4B) NÃO conseguimos rasterizar -> envia o PDF original da Webmania
+        debugPrint(
+          'Enviando DANFE original para a impressora (fallback, sem raster).',
+        );
+
+        await Printing.directPrintPdf(
+          printer: impressoraNota,
+          onLayout: (format) async => pdfBytes,
+        );
+      }
     } catch (e) {
       debugPrint('Erro ao imprimir DANFE: $e');
       ScaffoldMessenger.of(
@@ -447,6 +470,7 @@ class _VendasViewState extends State<VendasView> {
     List<Map<String, dynamic>> itensVendidos,
     double valorFrete,
     List<Map<String, dynamic>> pagamentos,
+    double totalPago,
   ) async {
     if (itensVendidos.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -544,12 +568,13 @@ class _VendasViewState extends State<VendasView> {
         );
 
         // 👇 aqui vem a mágica: imprimir a DANFE automaticamente
-        final danfeUrl = retorno['danfe'] as String?;
-        if (danfeUrl != null && danfeUrl.isNotEmpty) {
-          await _imprimirDanfeTermica(danfeUrl);
-        } else {
-          debugPrint('⚠ DANFE não retornada pela API.');
-        }
+        await _imprimirDanfeCupom(
+          List<Map<String, dynamic>>.from(itensVendidos), // cópia
+          valorFrete, // mesmo frete
+          List<Map<String, dynamic>>.from(pagamentos), // cópia
+          totalPago, // veio do resumo
+          Map<String, dynamic>.from(retorno as Map), // retorno da Webmania
+        );
       } else {
         debugPrint('❌ Erro ao emitir NFC-e: $resultado');
         ScaffoldMessenger.of(context).showSnackBar(
@@ -818,6 +843,288 @@ class _VendasViewState extends State<VendasView> {
     );
 
     // Imprimir diretamente
+    await Printing.directPrintPdf(
+      printer: impressoraNota,
+      onLayout: (format) async => pdf.save(),
+    );
+  }
+
+  Future<void> _imprimirDanfeCupom(
+    List<Map<String, dynamic>> itens,
+    double frete,
+    List<Map<String, dynamic>> pagamentos,
+    double totalPago,
+    Map<String, dynamic> retornoNfce,
+  ) async {
+    final nomeLoja = await buscarNomeLoja();
+
+    // ====== DADOS FISCAIS DA NFC-e (retorno Webmania) ======
+    final String numeroNfe = (retornoNfce['nfe'] ?? '').toString();
+    final String serie = (retornoNfce['serie'] ?? '').toString();
+    final String chave = (retornoNfce['chave'] ?? '').toString();
+
+    // alguns retornos vêm com 'protocolo' ou 'nProt'
+    final String protocolo =
+        (retornoNfce['protocolo'] ?? retornoNfce['nProt'] ?? '').toString();
+
+    // ambiente: 1 produção, 2 homologação (nomes variam)
+    final String ambienteRaw =
+        (retornoNfce['ambiente'] ?? retornoNfce['tpAmb'] ?? '1').toString();
+    final String ambiente = ambienteRaw == '2' ? 'Homologação' : 'Produção';
+
+    // URL/STRING para gerar o QRCode (tenta vários campos comuns da Webmania)
+    final String qrCodeDataRaw =
+        (retornoNfce['qrcode'] ??
+                retornoNfce['qr_code'] ??
+                retornoNfce['url_qrcode'] ??
+                retornoNfce['url_consulta'] ??
+                '')
+            .toString();
+
+    // se não vier URL nenhuma, usamos a própria chave como fallback
+    final String qrCodeString = qrCodeDataRaw.isNotEmpty
+        ? qrCodeDataRaw
+        : chave;
+
+    // só pra debug:
+    debugPrint('QR RAW: $qrCodeDataRaw');
+    debugPrint('QR USADO: $qrCodeString');
+
+    // Formata chave em blocos de 4
+    String formatarChave(String c) {
+      final digits = c.replaceAll(RegExp(r'\D'), '');
+      return digits.replaceAllMapped(RegExp(r'.{4}'), (m) => '${m.group(0)} ');
+    }
+
+    final chaveFormatada = chave.isNotEmpty ? formatarChave(chave) : '---';
+
+    // ====== MESMA LÓGICA DO COMPROVANTE DE PAGAMENTO ======
+    final valorFrete = frete;
+
+    double totalVenda = itens.fold(0.0, (total, item) {
+      final preco = (item['precoFinal'] as num?) ?? 0.0;
+      final qtd = (item['quantidade'] as num?) ?? 0;
+      return total + (preco * qtd);
+    });
+
+    final formasPagamento = pagamentos
+        .map((p) => p['forma'])
+        .where((f) => f != null && f.toString().isNotEmpty)
+        .join(", ");
+
+    final troco = (totalPago - totalVenda - valorFrete).clamp(
+      0,
+      double.infinity,
+    );
+
+    debugPrint(
+      'DANFE CUPOM -> itens: ${itens.length}, totalVenda: $totalVenda, totalPago: $totalPago, frete: $valorFrete',
+    );
+
+    final pdf = pw.Document();
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat(58 * PdfPageFormat.mm, double.infinity),
+        margin: pw.EdgeInsets.zero,
+        build: (context) {
+          return pw.Padding(
+            padding: const pw.EdgeInsets.all(4),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                // ====== CABEÇALHO ======
+                pw.Center(
+                  child: pw.Text(
+                    "SENHORITA CINTAS",
+                    style: pw.TextStyle(
+                      fontSize: 12,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                ),
+                pw.Center(
+                  child: pw.Text(
+                    "DANFE NFC-e",
+                    style: pw.TextStyle(
+                      fontSize: 10,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                ),
+                pw.Center(
+                  child: pw.Text(
+                    "Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica",
+                    style: pw.TextStyle(fontSize: 7),
+                    textAlign: pw.TextAlign.center,
+                  ),
+                ),
+                pw.SizedBox(height: 4),
+
+                pw.Text("Loja: $nomeLoja", style: pw.TextStyle(fontSize: 8)),
+                pw.Text(
+                  "Funcionário: ${funcionarioSelecionado ?? '-'}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Cliente: ${clienteNomeController.text.isNotEmpty ? clienteNomeController.text : 'CONSUMIDOR'}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "NFC-e: ${numeroNfe.isNotEmpty ? numeroNfe : '-'}  Série: ${serie.isNotEmpty ? serie : '-'}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Ambiente: $ambiente",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                if (protocolo.isNotEmpty)
+                  pw.Text(
+                    "Protocolo: $protocolo",
+                    style: pw.TextStyle(fontSize: 8),
+                  ),
+                pw.Text("Chave de acesso:", style: pw.TextStyle(fontSize: 8)),
+                pw.Text(chaveFormatada, style: pw.TextStyle(fontSize: 7)),
+                pw.Text(
+                  "Data: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+
+                pw.SizedBox(height: 6),
+
+                // ====== ITENS ======
+                pw.Text(
+                  "Itens:",
+                  style: pw.TextStyle(
+                    fontWeight: pw.FontWeight.bold,
+                    fontSize: 9,
+                  ),
+                ),
+                pw.Divider(thickness: 1),
+
+                ...itens.map((item) {
+                  final nome = item['produtoNome'] ?? '';
+                  final tamanho = item['tamanho'] ?? '';
+                  final cor = item['cor'] ?? '';
+                  final qtd = (item['quantidade'] as num?)?.toInt() ?? 0;
+                  final preco = (item['precoFinal'] as num?) ?? 0.0;
+                  final precoPromocional =
+                      (item['precoPromocional'] as num?) ?? 0.0;
+                  final desconto = (item['desconto'] as num?) ?? 0.0;
+
+                  final precoUnitario = preco;
+                  final precoTotal = precoUnitario * qtd;
+
+                  final temPromocao =
+                      precoPromocional > 0 && precoPromocional < preco;
+                  final temDesconto = desconto > 0;
+
+                  final precoUnitarioTexto = temPromocao
+                      ? "R\$ ${precoPromocional.toStringAsFixed(2)} (Promo)"
+                      : temDesconto
+                      ? "R\$ ${preco.toStringAsFixed(2)} (-R\$ ${desconto.toStringAsFixed(2)})"
+                      : "R\$ ${preco.toStringAsFixed(2)}";
+
+                  return pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        "$nome ${tamanho.isNotEmpty ? '($tamanho' : ''}"
+                        "${tamanho.isNotEmpty && cor.toString().isNotEmpty ? ' • ' : ''}"
+                        "${cor.toString().isNotEmpty ? cor : ''}"
+                        "${tamanho.isNotEmpty ? ')' : ''}",
+                        style: pw.TextStyle(fontSize: 8),
+                      ),
+                      pw.Text(
+                        "Qtd: $qtd x $precoUnitarioTexto = R\$ ${precoTotal.toStringAsFixed(2)}",
+                        style: pw.TextStyle(fontSize: 8),
+                      ),
+                      pw.SizedBox(height: 2),
+                    ],
+                  );
+                }),
+
+                pw.Divider(thickness: 0.5),
+
+                if (valorFrete > 0)
+                  pw.Text(
+                    "Frete: R\$ ${valorFrete.toStringAsFixed(2)}",
+                    style: pw.TextStyle(fontSize: 8),
+                  ),
+                if (valorFrete > 0)
+                  pw.Text(
+                    "Total c/ Frete: R\$ ${(totalVenda + valorFrete).toStringAsFixed(2)}",
+                    style: pw.TextStyle(fontSize: 8),
+                  ),
+                pw.Text(
+                  "Total Produtos: R\$ ${totalVenda.toStringAsFixed(2)}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Total Pago: R\$ ${totalPago.toStringAsFixed(2)}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Troco: R\$ ${troco.toStringAsFixed(2)}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+                pw.Text(
+                  "Forma de Pagamento: "
+                  "${formasPagamento.isNotEmpty ? formasPagamento : 'Não informado'}",
+                  style: pw.TextStyle(fontSize: 8),
+                ),
+
+                pw.SizedBox(height: 6),
+
+                // ====== QR-CODE ======
+                // ====== QR-CODE ======
+                if (qrCodeString.isNotEmpty) ...[
+                  pw.Center(
+                    child: pw.Text(
+                      "Consulta via QR Code:",
+                      style: pw.TextStyle(fontSize: 7),
+                    ),
+                  ),
+                  pw.SizedBox(height: 2),
+                  pw.Center(
+                    child: pw.BarcodeWidget(
+                      barcode: pw.Barcode.qrCode(),
+                      data: qrCodeString,
+                      width: 90, // pode aumentar um pouco
+                      height: 90,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                ],
+
+                pw.Center(
+                  child: pw.Text(
+                    "Consulta também pela chave de acesso no portal da Sefaz.",
+                    style: pw.TextStyle(fontSize: 7),
+                    textAlign: pw.TextAlign.center,
+                  ),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Center(
+                  child: pw.Text(
+                    "Obrigada pela preferência!",
+                    style: pw.TextStyle(fontSize: 9),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    final impressoras = await Printing.listPrinters();
+    final impressoraNota = impressoras.firstWhere(
+      (p) => p.name.toUpperCase() == 'IMPRESSORA NOTA',
+      orElse: () =>
+          throw Exception('Impressora IMPRESSORA NOTA não encontrada'),
+    );
+
     await Printing.directPrintPdf(
       printer: impressoraNota,
       onLayout: (format) async => pdf.save(),
