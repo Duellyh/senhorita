@@ -18,6 +18,7 @@ class _LoginViewState extends State<LoginView> {
   final TextEditingController _senhaController = TextEditingController();
   final LoginViewModel _viewModel = LoginViewModel();
   bool _senhaVisivel = false;
+  String? _lojaSelecionada;
 
   @override
   void dispose() {
@@ -74,7 +75,7 @@ class _LoginViewState extends State<LoginView> {
     );
   }
 
-  Future<void> _selecionarLoja(DocumentSnapshot usuarioDoc) async {
+  Future<String?> _selecionarLoja(DocumentSnapshot usuarioDoc) async {
     String? lojaSelecionada = await showDialog<String>(
       context: context,
       barrierDismissible: false,
@@ -91,21 +92,13 @@ class _LoginViewState extends State<LoginView> {
                     title: const Text('Senhorita Modeladores (Matriz)'),
                     value: 'Senhorita Modeladores (Matriz)',
                     groupValue: selecionado,
-                    onChanged: (value) {
-                      setState(() {
-                        selecionado = value;
-                      });
-                    },
+                    onChanged: (value) => setState(() => selecionado = value),
                   ),
                   RadioListTile<String>(
                     title: const Text('Senhorita Jalecos (Filial)'),
                     value: 'Senhorita Jalecos (Filial)',
                     groupValue: selecionado,
-                    onChanged: (value) {
-                      setState(() {
-                        selecionado = value;
-                      });
-                    },
+                    onChanged: (value) => setState(() => selecionado = value),
                   ),
                 ],
               );
@@ -114,9 +107,7 @@ class _LoginViewState extends State<LoginView> {
           actions: [
             TextButton(
               onPressed: () {
-                if (selecionado != null) {
-                  Navigator.of(context).pop(selecionado);
-                }
+                if (selecionado != null) Navigator.of(context).pop(selecionado);
               },
               child: const Text('Confirmar'),
             ),
@@ -125,20 +116,25 @@ class _LoginViewState extends State<LoginView> {
       },
     );
 
-    if (lojaSelecionada != null) {
-      try {
-        await FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(usuarioDoc.id)
-            .update({'lojaSelecionada': lojaSelecionada});
-      } catch (e) {
-        _mostrarAlerta(
-          'Erro',
-          'Erro ao atualizar loja selecionada.',
-          Colors.red,
-          Icons.error_outline,
-        );
-      }
+    if (lojaSelecionada == null) return null;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(usuarioDoc.id)
+          .update({'lojaSelecionada': lojaSelecionada});
+
+      setState(() => _lojaSelecionada = lojaSelecionada);
+
+      return lojaSelecionada; // 👈 IMPORTANTE
+    } catch (e) {
+      _mostrarAlerta(
+        'Erro',
+        'Erro ao atualizar loja selecionada.',
+        Colors.red,
+        Icons.error_outline,
+      );
+      return null;
     }
   }
 
@@ -230,17 +226,31 @@ class _LoginViewState extends State<LoginView> {
       final tipoUsuario = usuarioDoc['tipo'];
 
       Navigator.of(context).pop(); // Fecha loading
-      await _selecionarLoja(usuarioDoc);
+
+      final loja = await _selecionarLoja(usuarioDoc);
+      if (loja == null || loja.trim().isEmpty) {
+        // não deixa prosseguir sem loja
+        _mostrarAlerta(
+          'Atenção',
+          'Você precisa selecionar uma loja para continuar.',
+          Colors.orange,
+          Icons.info_outline,
+        );
+        return;
+      }
 
       if (tipoUsuario == 'admin') {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const HomeView()),
+          MaterialPageRoute(builder: (_) => HomeView(lojaSelecionada: loja)),
         );
       } else if (tipoUsuario == 'funcionario') {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const VendasView()),
+          MaterialPageRoute(
+            builder: (_) =>
+                VendasView(lojaSelecionada: loja), // precisa existir
+          ),
         );
       } else {
         _mostrarAlerta(
@@ -367,16 +377,12 @@ class _LoginViewState extends State<LoginView> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: <Widget>[
-                            const Text(
-                              'SENHORITA CINTAS MODELADORES',
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.pink,
-                              ),
-                              textAlign: TextAlign.center,
+                            Image.asset(
+                              'assets/logosenhorita.png',
+                              height: 150,
+                              fit: BoxFit.contain,
                             ),
-                            const SizedBox(height: 24),
+                            const SizedBox(height: 8),
                             TextField(
                               controller: _usuarioController,
                               decoration: const InputDecoration(

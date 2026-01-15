@@ -19,7 +19,8 @@ import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'dart:typed_data';
 
 class VendasView extends StatefulWidget {
-  const VendasView({super.key});
+  final String lojaSelecionada;
+  const VendasView({super.key, required this.lojaSelecionada});
 
   @override
   State<VendasView> createState() => _VendasViewState();
@@ -69,17 +70,34 @@ class _VendasViewState extends State<VendasView> {
   bool mostrarCampoFuncionario = false;
   bool _processandoVenda = false;
   final NfceService _nfceService = NfceService();
+  String? _lojaSelecionada;
 
   @override
   void initState() {
     super.initState();
     buscarTipoUsuario();
+    _carregarLojaSelecionada();
     buscarFuncionarios().then((lista) {
       setState(() {
         funcionarios = lista;
       });
     });
     mostrarCampoFuncionario = false;
+  }
+
+  Future<void> _carregarLojaSelecionada() async {
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(user!.uid)
+        .get();
+
+    final data = doc.data();
+
+    setState(() {
+      _lojaSelecionada = data?['lojaSelecionada'];
+    });
   }
 
   double _freteAtual() {
@@ -1198,12 +1216,35 @@ class _VendasViewState extends State<VendasView> {
   }
 
   Future<void> realizarVenda() async {
-    // trava: se já estiver processando, ignora novas chamadas
     if (_processandoVenda) return;
     _processandoVenda = true;
 
+    double _toDouble(dynamic v) {
+      if (v is num) return v.toDouble();
+      if (v == null) return 0.0;
+      final s = v.toString().replaceAll('.', '').replaceAll(',', '.').trim();
+      return double.tryParse(s) ?? 0.0;
+    }
+
+    int _toInt(dynamic v, {int def = 0}) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v == null) return def;
+      return int.tryParse(v.toString().trim()) ?? def;
+    }
+
     final totalVenda = _calcularTotalGeral();
     final totalPago = _calcularTotalPago();
+
+    if (_lojaSelecionada == null || _lojaSelecionada!.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nenhuma loja selecionada para esta venda.'),
+        ),
+      );
+      _processandoVenda = false;
+      return;
+    }
 
     if (itensVendidos.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1232,45 +1273,103 @@ class _VendasViewState extends State<VendasView> {
       double custoRealTotal = 0;
       final List<Map<String, dynamic>> itensComValorReal = [];
 
-      // 1) Enriquecer itens com valorReal (lendo da coleção 'produtos')
+      // lojas envolvidas na venda
+      final Set<String> lojasProdutosSet = {};
+
+      // 1) Enriquecer itens com valorReal + lojaProduto
       for (final item in itensVendidos) {
-        final produtoId = item['produtoId'];
-        final quantidadeVendida = item['quantidade'];
+        final itemMap = Map<String, dynamic>.from(item as Map);
 
-        double valorReal = 0;
+        final String produtoDocId = (itemMap['docId'] ?? '').toString().trim();
+        final int qtdInt = _toInt(itemMap['quantidade'], def: 0);
 
-        final produtoQuery = await firestore
-            .collection('produtos')
-            .where('codigoBarras', isEqualTo: produtoId)
-            .limit(1)
-            .get();
+        double valorReal = 0.0;
+        String lojaProduto = '';
 
-        if (produtoQuery.docs.isNotEmpty) {
-          final data = produtoQuery.docs.first.data();
-          valorReal = (data['valorReal'] ?? 0).toDouble();
+        try {
+          if (produtoDocId.isNotEmpty) {
+            final doc = await firestore
+                .collection('produtos')
+                .doc(produtoDocId)
+                .get();
+            if (doc.exists) {
+              final data = doc.data()!;
+              valorReal = _toDouble(data['valorReal']);
+              lojaProduto = (data['loja'] ?? '').toString().trim();
+            }
+          } else {
+            // Fallback por código de barras
+            final cb = (itemMap['codigoBarras'] ?? itemMap['produtoId'] ?? '')
+                .toString()
+                .trim();
+            if (cb.isNotEmpty) {
+              final produtoQuery = await firestore
+                  .collection('produtos')
+                  .where('codigoBarras', isEqualTo: cb)
+                  .limit(1)
+                  .get();
+
+              if (produtoQuery.docs.isNotEmpty) {
+                final data = produtoQuery.docs.first.data();
+                valorReal = _toDouble(data['valorReal']);
+                lojaProduto = (data['loja'] ?? '').toString().trim();
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('Erro ao buscar valorReal/loja do produto: $e');
         }
 
-        custoRealTotal += valorReal * (quantidadeVendida as num).toDouble();
+        // fallback opcional (evita loja vazia no item, melhora filtros)
+        if (lojaProduto.isEmpty) {
+          lojaProduto = _lojaSelecionada!.trim();
+        }
 
-        final itemAtualizado = Map<String, dynamic>.from(item);
-        itemAtualizado['valorReal'] = valorReal;
-        itensComValorReal.add(itemAtualizado);
+        if (lojaProduto.isNotEmpty) lojasProdutosSet.add(lojaProduto);
+
+        custoRealTotal += valorReal * qtdInt.toDouble();
+
+        itemMap['valorReal'] = valorReal;
+        itemMap['lojaProduto'] = lojaProduto;
+
+        // COMPATIBILIDADE: também grava "loja" dentro do item
+        // (para telas antigas que olham item['loja'])
+        itemMap['loja'] = lojaProduto;
+
+        itensComValorReal.add(itemMap);
       }
 
       final categorias = itensVendidos
-          .map((item) => item['categoria'] ?? 'Sem categoria')
+          .map((item) => (item['categoria'] ?? 'Sem categoria').toString())
           .toSet()
           .toList();
 
-      // 2) Registrar a venda (apenas 1x)
-      await firestore.collection('vendas').add({
-        'produtoId': produtoEncontrado?['docId'] ?? produtoEncontrado?['id'],
-        'produtoNome': produtoEncontrado?['nome'],
-        'codigoBarras': produtoEncontrado?['codigoBarras'],
-        'quantidade': quantidade,
-        'tamanho': tamanhoSelecionado ?? '',
-        'cor': corSelecionada ?? '',
-        'dataVenda': DateTime.now(),
+      final Map<String, dynamic>? primeiroItem = itensComValorReal.isNotEmpty
+          ? itensComValorReal.first
+          : null;
+
+      // total precoFinal seguro
+      final double totalPrecoFinal = itensComValorReal.fold<double>(0.0, (
+        t,
+        it,
+      ) {
+        final double pf = _toDouble(
+          it['precoFinal'] ?? it['preco'] ?? it['valor'],
+        );
+        final int q = _toInt(it['quantidade'], def: 1);
+        return t + (pf * q);
+      });
+
+      // ✅ MONTA O PAYLOAD 1x (mesma info para as 2 coleções)
+      final vendaPayload = <String, dynamic>{
+        'produtoId': primeiroItem?['produtoId'],
+        'produtoNome': primeiroItem?['produtoNome'],
+        'codigoBarras': primeiroItem?['codigoBarras'],
+        'quantidade': primeiroItem?['quantidade'],
+        'tamanho': primeiroItem?['tamanho'],
+        'cor': primeiroItem?['cor'],
+
+        'dataVenda': Timestamp.now(),
         'totalVenda': totalVenda,
         'tipoNota': tipoNotaSelecionada,
         'itens': itensComValorReal,
@@ -1289,29 +1388,53 @@ class _VendasViewState extends State<VendasView> {
         'clienteId': clienteSelecionado?['id'],
         'usuarioId': FirebaseAuth.instance.currentUser?.uid,
         'formasPagamento': pagamentos.map((p) => p['forma']).toList(),
-        'lojaSelecionada': FirebaseAuth.instance.currentUser?.uid,
+
+        // 🔥 cabeçalho de loja (novo + compat)
+        'lojaCaixa': _lojaSelecionada!.trim(),
+        'loja': _lojaSelecionada!.trim(),
+
+        // lojas dos produtos
+        'lojaProdutoOficial': lojasProdutosSet.toList(),
+
         'funcionario': funcionarioSelecionado ?? '---',
         'valorReal': custoRealTotal,
         'categorias': categorias,
         'precoPromocional': itensComValorReal.any(
-          (item) => item['precoPromocional'] != null,
+          (it) => it['precoPromocional'] != null,
         ),
-        'desconto': itensComValorReal.any((item) => item['desconto'] != null)
+        'desconto': itensComValorReal.any((it) => it['desconto'] != null)
             ? _calcularDescontoTotal()
             : 0.0,
-        'precoFinal': itensComValorReal.fold<double>(
-          0.0,
-          (total, item) =>
-              total +
-              (item['precoFinal'] as double) * (item['quantidade'] as int),
-        ),
-      });
+        'precoFinal': totalPrecoFinal,
+
+        // opcional (ajuda em debug/migração)
+        'modelo': 'v2',
+      };
+
+      // ✅ grava em vendas e vendidos (mesmo conteúdo)
+      final refVendas = firestore.collection('vendas').doc();
+      final refVendidos = firestore.collection('vendidos').doc(refVendas.id);
+
+      // grava as duas antes do commit do batch (ou você pode incluir no batch)
+      await Future.wait([
+        refVendas.set(vendaPayload),
+        refVendidos.set(vendaPayload),
+      ]);
 
       // 3) Dar baixa SOMENTE na coleção 'produtos'
       for (final item in itensComValorReal) {
-        final String? produtoDocId = item['docId'] as String?;
-        if (produtoDocId == null || produtoDocId.isEmpty) {
-          final cb = item['produtoId'];
+        final String produtoDocId = (item['docId'] ?? '').toString().trim();
+
+        DocumentReference<Map<String, dynamic>>? produtoRef;
+
+        if (produtoDocId.isNotEmpty) {
+          produtoRef = firestore.collection('produtos').doc(produtoDocId);
+        } else {
+          final cb = (item['codigoBarras'] ?? item['produtoId'] ?? '')
+              .toString()
+              .trim();
+          if (cb.isEmpty) continue;
+
           final q = await firestore
               .collection('produtos')
               .where('codigoBarras', isEqualTo: cb)
@@ -1319,49 +1442,20 @@ class _VendasViewState extends State<VendasView> {
               .get();
           if (q.docs.isEmpty) continue;
 
-          final produtoRef = q.docs.first.reference;
-
-          final tamanho = (item['tamanho'] ?? '') as String;
-          final cor = (item['cor'] ?? '') as String;
-          final quantidadeVendida = (item['quantidade'] ?? 0) as int;
-
-          if (tamanho.isNotEmpty && cor.isNotEmpty) {
-            batch.update(produtoRef, {
-              'tamanhosCores.$tamanho.$cor': FieldValue.increment(
-                -quantidadeVendida,
-              ),
-              'tamanhos.$tamanho': FieldValue.increment(
-                -quantidadeVendida,
-              ), // retrocompat
-              'quantidade': FieldValue.increment(-quantidadeVendida),
-            });
-          } else if (tamanho.isNotEmpty) {
-            batch.update(produtoRef, {
-              'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
-              'quantidade': FieldValue.increment(-quantidadeVendida),
-            });
-          } else {
-            batch.update(produtoRef, {
-              'quantidade': FieldValue.increment(-quantidadeVendida),
-            });
-          }
-          continue;
+          produtoRef = q.docs.first.reference;
         }
 
-        final produtoRef = firestore.collection('produtos').doc(produtoDocId);
-
-        final tamanho = (item['tamanho'] ?? '') as String;
-        final cor = (item['cor'] ?? '') as String;
-        final quantidadeVendida = (item['quantidade'] ?? 0) as int;
+        final tamanho = (item['tamanho'] ?? '').toString();
+        final cor = (item['cor'] ?? '').toString();
+        final quantidadeVendida = _toInt(item['quantidade'], def: 0);
+        if (quantidadeVendida <= 0) continue;
 
         if (tamanho.isNotEmpty && cor.isNotEmpty) {
           batch.update(produtoRef, {
             'tamanhosCores.$tamanho.$cor': FieldValue.increment(
               -quantidadeVendida,
             ),
-            'tamanhos.$tamanho': FieldValue.increment(
-              -quantidadeVendida,
-            ), // retrocompat
+            'tamanhos.$tamanho': FieldValue.increment(-quantidadeVendida),
             'quantidade': FieldValue.increment(-quantidadeVendida),
           });
         } else if (tamanho.isNotEmpty) {
@@ -1493,33 +1587,50 @@ class _VendasViewState extends State<VendasView> {
                 _menuItem(Icons.dashboard, 'Home', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeView()),
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          HomeView(lojaSelecionada: widget.lojaSelecionada),
+                    ),
                   );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const VendasView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VendasView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) => ProdutosView(
+                      lojaSelecionada:
+                          widget.lojaSelecionada, // 👈 usa a mesma loja
+                    ),
+                  ),
                 );
               }),
+
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AdicionarProdutosView(),
+                    builder: (_) => AdicionarProdutosView(
+                      lojaSelecionada: widget.lojaSelecionada,
+                    ),
                   ),
                 );
               }),
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               if (tipoUsuario == 'funcionario')
@@ -1527,7 +1638,9 @@ class _VendasViewState extends State<VendasView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const VendasRealizadasView(),
+                      builder: (_) => VendasRealizadasView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -1535,7 +1648,11 @@ class _VendasViewState extends State<VendasView> {
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                    MaterialPageRoute(
+                      builder: (_) => RelatoriosView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
+                    ),
                   );
                 }),
               if (tipoUsuario == 'admin')
@@ -1543,7 +1660,9 @@ class _VendasViewState extends State<VendasView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ConfiguracoesView(),
+                      builder: (_) => ConfiguracoesView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),

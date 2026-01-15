@@ -17,7 +17,9 @@ import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 
 class RelatoriosView extends StatefulWidget {
-  const RelatoriosView({super.key});
+  final String lojaSelecionada; // 👈 guarda a loja
+
+  const RelatoriosView({super.key, required this.lojaSelecionada});
 
   @override
   State<RelatoriosView> createState() => _RelatoriosViewState();
@@ -40,6 +42,16 @@ class _RelatoriosViewState extends State<RelatoriosView> {
     buscarTipoUsuario();
   }
 
+  /// Se em algum momento você recriar o RelatoriosView com outra loja,
+  /// recarrega o resumo automaticamente.
+  @override
+  void didUpdateWidget(covariant RelatoriosView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.lojaSelecionada != widget.lojaSelecionada) {
+      _carregarRelatorio();
+    }
+  }
+
   Future<void> buscarTipoUsuario() async {
     if (user != null) {
       final doc = await FirebaseFirestore.instance
@@ -54,28 +66,60 @@ class _RelatoriosViewState extends State<RelatoriosView> {
   }
 
   Future<void> _carregarRelatorio() async {
-    final vendasSnapshot = await FirebaseFirestore.instance
-        .collection('vendas')
-        .get();
-    final clientesSnapshot = await FirebaseFirestore.instance
-        .collection('clientes')
-        .get();
+    try {
+      // 🔹 LOJA ATUAL
+      final loja = widget.lojaSelecionada;
 
-    double somaRecebido = 0.0;
+      if (loja.isEmpty) {
+        // Se por algum motivo vier vazio, você pode decidir se:
+        // - retorna tudo, ou
+        // - simplesmente zera os resumos.
+        setState(() {
+          totalVendas = 0;
+          totalRecebido = 0.0;
+          totalClientes = 0;
+        });
+        return;
+      }
 
-    for (var doc in vendasSnapshot.docs) {
-      final data = doc.data();
-      final totalPago = data['totalPago'];
-      if (totalPago != null && totalPago is num) {
-        somaRecebido += totalPago.toDouble();
+      // 🔹 VENDAS APENAS DA LOJA SELECIONADA
+      final vendasSnapshot = await FirebaseFirestore.instance
+          .collection('vendas')
+          .where('loja', isEqualTo: loja)
+          .get();
+
+      // 🔹 CLIENTES APENAS DA LOJA SELECIONADA
+      // (isso só funciona se você salvar 'loja' em cada cliente)
+      final clientesSnapshot = await FirebaseFirestore.instance
+          .collection('clientes')
+          .where('loja', isEqualTo: loja)
+          .get();
+
+      double somaRecebido = 0.0;
+
+      for (var doc in vendasSnapshot.docs) {
+        final data = doc.data();
+        final totalPago = data['totalPago'];
+
+        if (totalPago != null && totalPago is num) {
+          somaRecebido += totalPago.toDouble();
+        }
+      }
+
+      setState(() {
+        totalVendas = vendasSnapshot.size;
+        totalRecebido = somaRecebido;
+        totalClientes = clientesSnapshot.size;
+      });
+    } catch (e, stack) {
+      debugPrint('Erro ao carregar relatório: $e');
+      debugPrint(stack.toString());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar relatório: $e')),
+        );
       }
     }
-
-    setState(() {
-      totalVendas = vendasSnapshot.size;
-      totalRecebido = somaRecebido;
-      totalClientes = clientesSnapshot.size;
-    });
   }
 
   String formatCurrency(double value) {
@@ -148,6 +192,14 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Loja: ${widget.lojaSelecionada}',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -155,33 +207,50 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                 _menuItem(Icons.dashboard, 'Home', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeView()),
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          HomeView(lojaSelecionada: widget.lojaSelecionada),
+                    ),
                   );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const VendasView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VendasView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) => ProdutosView(
+                      lojaSelecionada:
+                          widget.lojaSelecionada, // 👈 usa a mesma loja
+                    ),
+                  ),
                 );
               }),
+
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AdicionarProdutosView(),
+                    builder: (_) => AdicionarProdutosView(
+                      lojaSelecionada: widget.lojaSelecionada,
+                    ),
                   ),
                 );
               }),
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               if (tipoUsuario == 'funcionario')
@@ -189,7 +258,9 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const VendasRealizadasView(),
+                      builder: (_) => VendasRealizadasView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -197,7 +268,11 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                    MaterialPageRoute(
+                      builder: (_) => RelatoriosView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
+                    ),
                   );
                 }),
               if (tipoUsuario == 'admin')
@@ -205,7 +280,9 @@ class _RelatoriosViewState extends State<RelatoriosView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ConfiguracoesView(),
+                      builder: (_) => ConfiguracoesView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -253,7 +330,10 @@ class _RelatoriosViewState extends State<RelatoriosView> {
               color: Colors.blue,
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const EstoqueView()),
+                MaterialPageRoute(
+                  builder: (_) =>
+                      EstoqueView(lojaSelecionada: widget.lojaSelecionada),
+                ),
               ),
             ),
             _actionCard(
@@ -262,7 +342,11 @@ class _RelatoriosViewState extends State<RelatoriosView> {
               color: Colors.orange,
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const HistoricoVendasView()),
+                MaterialPageRoute(
+                  builder: (_) => HistoricoVendasView(
+                    lojaSelecionada: widget.lojaSelecionada,
+                  ),
+                ),
               ),
             ),
             _actionCard(
@@ -271,7 +355,10 @@ class _RelatoriosViewState extends State<RelatoriosView> {
               color: Colors.teal,
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const FinanceiroView()),
+                MaterialPageRoute(
+                  builder: (_) =>
+                      FinanceiroView(lojaSelecionada: widget.lojaSelecionada),
+                ),
               ),
             ),
           ],

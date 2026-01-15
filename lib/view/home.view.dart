@@ -8,6 +8,7 @@ import 'package:senhorita/view/adicionar.produtos.view.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/estoque.view.dart';
+import 'package:senhorita/view/financeiro.especifico.dart';
 import 'package:senhorita/view/financeiro.view.dart';
 import 'package:senhorita/view/historico.vendas.dart';
 import 'package:senhorita/view/produtos.view.dart';
@@ -17,7 +18,8 @@ import 'package:senhorita/view/vendas.view.dart';
 import 'login.view.dart';
 
 class HomeView extends StatefulWidget {
-  const HomeView({super.key});
+  final String lojaSelecionada;
+  const HomeView({super.key, required this.lojaSelecionada});
 
   @override
   State<HomeView> createState() => _HomeViewState();
@@ -29,6 +31,7 @@ class _HomeViewState extends State<HomeView> {
   final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
+  String? _lojaSelecionada;
 
   @override
   void initState() {
@@ -42,16 +45,39 @@ class _HomeViewState extends State<HomeView> {
           .collection('usuarios')
           .doc(user!.uid)
           .get();
+
+      final data = doc.data();
+
       setState(() {
-        tipoUsuario = doc['tipo'] ?? 'funcionario';
-        nomeUsuario = doc['nome'] ?? 'Usuário';
+        tipoUsuario = data?['tipo'] ?? 'funcionario';
+        nomeUsuario = data?['nome'] ?? 'Usuário';
+        final lojaUser = (data?['lojaSelecionada'] ?? '').toString().trim();
+        _lojaSelecionada = widget.lojaSelecionada.trim().isNotEmpty
+            ? widget.lojaSelecionada.trim()
+            : (lojaUser.isNotEmpty ? lojaUser : null);
       });
     }
   }
 
+  String? get _lojaAtual {
+    final l = (widget.lojaSelecionada).trim();
+    if (l.isNotEmpty) return l;
+
+    final u = (_lojaSelecionada ?? '').trim();
+    if (u.isNotEmpty) return u;
+
+    return null;
+  }
+
   Future<int> _contarDocumentos(String colecao) async {
-    final snapshot = await FirebaseFirestore.instance.collection(colecao).get();
-    return snapshot.docs.length;
+    final loja = _lojaAtual;
+    if (loja == null) return 0;
+
+    final ref = FirebaseFirestore.instance.collection(colecao);
+
+    // Se a coleção tiver campo "loja"
+    final snap = await ref.where('loja', isEqualTo: loja).get();
+    return snap.docs.length;
   }
 
   bool _ehEstoqueBaixo(Map<String, dynamic> data, {int threshold = 1}) {
@@ -83,7 +109,14 @@ class _HomeViewState extends State<HomeView> {
   }
 
   Future<int> contarProdutosComEstoqueBaixo({int threshold = 1}) async {
-    final snap = await FirebaseFirestore.instance.collection('produtos').get();
+    final loja = _lojaAtual;
+    if (loja == null) return 0;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('produtos')
+        .where('loja', isEqualTo: loja)
+        .get();
+
     var count = 0;
     for (final doc in snap.docs) {
       final data = doc.data();
@@ -152,33 +185,71 @@ class _HomeViewState extends State<HomeView> {
                 _menuItem(Icons.dashboard, 'Home', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeView()),
+                    MaterialPageRoute(
+                      builder: (_) => HomeView(
+                        lojaSelecionada:
+                            _lojaSelecionada ?? widget.lojaSelecionada,
+                      ),
+                    ),
                   );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
+                final loja = _lojaAtual;
+                if (loja == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Selecione uma loja primeiro.'),
+                    ),
+                  );
+                  return;
+                }
+
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const VendasView()),
+                  MaterialPageRoute(
+                    builder: (_) => VendasView(lojaSelecionada: loja),
+                  ),
                 );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
+                if (_lojaSelecionada == null) {
+                  // mensagem simples avisando
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Selecione uma loja primeiro.'),
+                    ),
+                  );
+                  return;
+                }
+
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) => ProdutosView(
+                      lojaSelecionada:
+                          _lojaSelecionada!, // 👈 vamos ajustar essa tela depois
+                    ),
+                  ),
                 );
               }),
+
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AdicionarProdutosView(),
+                    builder: (_) => AdicionarProdutosView(
+                      lojaSelecionada: widget.lojaSelecionada,
+                    ),
                   ),
                 );
               }),
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               if (tipoUsuario == 'funcionario')
@@ -186,23 +257,42 @@ class _HomeViewState extends State<HomeView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const VendasRealizadasView(),
+                      builder: (_) => VendasRealizadasView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.show_chart, 'Relatórios', () {
+                  if (_lojaSelecionada == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Selecione uma loja primeiro.'),
+                      ),
+                    );
+                    return;
+                  }
+
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                    MaterialPageRoute(
+                      builder: (_) => RelatoriosView(
+                        lojaSelecionada:
+                            _lojaSelecionada!, // vamos ajustar depois também
+                      ),
+                    ),
                   );
                 }),
+
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.settings, 'Configurações', () {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ConfiguracoesView(),
+                      builder: (_) => ConfiguracoesView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -222,13 +312,25 @@ class _HomeViewState extends State<HomeView> {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () {
+                        if (_lojaSelecionada == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione uma loja primeiro.'),
+                            ),
+                          );
+                          return;
+                        }
+
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => ProdutosView(),
+                            builder: (context) => ProdutosView(
+                              lojaSelecionada: _lojaSelecionada!,
+                            ),
                           ),
                         );
                       },
+
                       child: FutureBuilder<int>(
                         future: _contarDocumentos('produtos'),
                         builder: (context, snapshot) {
@@ -249,10 +351,21 @@ class _HomeViewState extends State<HomeView> {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () {
+                        final loja = _lojaAtual;
+                        if (loja == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione uma loja primeiro.'),
+                            ),
+                          );
+                          return;
+                        }
+
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => HistoricoVendasView(),
+                            builder: (_) =>
+                                HistoricoVendasView(lojaSelecionada: loja),
                           ),
                         );
                       },
@@ -279,7 +392,9 @@ class _HomeViewState extends State<HomeView> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => ClientesView(),
+                            builder: (_) => ClientesView(
+                              lojaSelecionada: widget.lojaSelecionada,
+                            ),
                           ),
                         );
                       },
@@ -303,10 +418,20 @@ class _HomeViewState extends State<HomeView> {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () {
+                        final loja = _lojaAtual;
+                        if (loja == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione uma loja primeiro.'),
+                            ),
+                          );
+                          return;
+                        }
+
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => EstoqueView(),
+                            builder: (_) => EstoqueView(lojaSelecionada: loja),
                           ),
                         );
                       },
@@ -348,10 +473,21 @@ class _HomeViewState extends State<HomeView> {
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () {
+                        final loja = _lojaAtual;
+                        if (loja == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione uma loja primeiro.'),
+                            ),
+                          );
+                          return;
+                        }
+
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => FinanceiroView(),
+                            builder: (_) =>
+                                FinanceiroView(lojaSelecionada: loja),
                           ),
                         );
                       },
@@ -360,10 +496,48 @@ class _HomeViewState extends State<HomeView> {
                         builder: (context, snapshot) {
                           final total = snapshot.data?.toString() ?? '...';
                           return _kpiCard(
-                            'Dashboard Financeiro',
+                            'Dashboard Financeiro Geral',
                             total,
                             Icons.monetization_on,
                             primaryColor,
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        final loja = _lojaAtual;
+                        if (loja == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Selecione uma loja primeiro.'),
+                            ),
+                          );
+                          return;
+                        }
+
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                FinanceiroEspecificoView(lojaSelecionada: loja),
+                          ),
+                        );
+                      },
+                      child: FutureBuilder<int>(
+                        future: _contarDocumentos('totalRecebido'),
+                        builder: (context, snapshot) {
+                          final total = snapshot.data?.toString() ?? '...';
+                          return _kpiCard(
+                            'Financeiro Específico',
+                            total,
+                            Icons.monetization_on,
+                            accentColor,
                           );
                         },
                       ),
@@ -446,18 +620,29 @@ class _HomeViewState extends State<HomeView> {
   }
 
   Widget _productList() {
+    final loja = _lojaAtual;
+
+    if (loja == null) {
+      return const Text('Selecione uma loja para ver os produtos.');
+    }
+
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('produtos')
+          .where('loja', isEqualTo: loja)
           .orderBy('dataCadastro', descending: true)
           .limit(5)
           .snapshots(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
+        if (snapshot.hasError) {
+          debugPrint('🔥 ERRO produtos: ${snapshot.error}');
+          return Text('Erro ao carregar produtos: ${snapshot.error}');
+        }
 
-        final docs = snapshot.data!.docs;
+        final docs = snapshot.data?.docs ?? [];
         if (docs.isEmpty) return const Text('Nenhum produto encontrado.');
 
         return Card(
@@ -468,11 +653,20 @@ class _HomeViewState extends State<HomeView> {
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (context, i) {
               final data = docs[i].data() as Map<String, dynamic>;
+              final nome = (data['nome'] ?? 'Sem nome').toString();
+              final categoria = (data['categoria'] ?? 'N/A').toString();
+
+              // evita crash se vier String/int/double
+              final rawPreco = data['precoVenda'];
+              final double preco = rawPreco is num
+                  ? rawPreco.toDouble()
+                  : double.tryParse(rawPreco?.toString() ?? '') ?? 0.0;
+
               return ListTile(
                 leading: const Icon(Icons.checkroom, color: Colors.deepPurple),
-                title: Text(data['nome'] ?? 'Sem nome'),
+                title: Text(nome),
                 subtitle: Text(
-                  'Categoria: ${data['categoria'] ?? 'N/A'} | Preço: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '0.00'}',
+                  'Categoria: $categoria | Preço: R\$ ${preco.toStringAsFixed(2)}',
                 ),
               );
             },
@@ -483,64 +677,159 @@ class _HomeViewState extends State<HomeView> {
   }
 
   Widget _salesList() {
+    final loja = _lojaAtual;
+
+    if (loja == null) {
+      return const Text('Selecione uma loja para ver as vendas.');
+    }
+
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('vendas')
           .orderBy('dataVenda', descending: true)
-          .limit(5)
+          .limit(30) // pega mais pra conseguir filtrar e ainda mostrar 5
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
-
         if (snapshot.hasError) {
           return const Center(child: Text('Erro ao carregar vendas.'));
         }
 
         final docs = snapshot.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return const Text('Nenhuma venda encontrada.');
-        }
+        if (docs.isEmpty) return const Text('Nenhuma venda encontrada.');
 
-        return Card(
-          child: ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: docs.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (context, i) {
-              final data = docs[i].data() as Map<String, dynamic>;
+        return FutureBuilder<List<QueryDocumentSnapshot>>(
+          future: _filtrarVendasPorLoja(docs, loja, maxRetorno: 5),
+          builder: (context, snapFiltradas) {
+            if (snapFiltradas.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapFiltradas.hasError) {
+              return const Text('Erro ao filtrar vendas por loja.');
+            }
 
-              // Corrigido: agora usa 'totalVenda'
-              double total = 0.0;
-              final rawTotal = data['totalVenda'];
-              if (rawTotal is int) {
-                total = rawTotal.toDouble();
-              } else if (rawTotal is double) {
-                total = rawTotal;
-              } else if (rawTotal is String) {
-                total = double.tryParse(rawTotal) ?? 0.0;
-              }
+            final filtradas = snapFiltradas.data ?? [];
+            if (filtradas.isEmpty) {
+              return Text('Nenhuma venda encontrada para "$loja".');
+            }
 
-              String dataFormatada = 'Data inválida';
-              final dataVendaRaw = data['dataVenda'];
-              if (dataVendaRaw is Timestamp) {
-                final dataVenda = dataVendaRaw.toDate();
-                dataFormatada = DateFormat(
-                  'dd/MM/yyyy HH:mm',
-                ).format(dataVenda);
-              }
+            return Card(
+              child: ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: filtradas.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final data = filtradas[i].data() as Map<String, dynamic>;
 
-              return ListTile(
-                leading: const Icon(Icons.attach_money, color: Colors.pink),
-                title: Text('Venda de R\$ ${total.toStringAsFixed(2)}'),
-                subtitle: Text('Data: $dataFormatada'),
-              );
-            },
-          ),
+                  // totalVenda seguro
+                  final rawTotal = data['totalVenda'];
+                  final double total = rawTotal is num
+                      ? rawTotal.toDouble()
+                      : double.tryParse(rawTotal?.toString() ?? '') ?? 0.0;
+
+                  // dataVenda segura
+                  String dataFormatada = 'Data inválida';
+                  final dv = data['dataVenda'];
+                  if (dv is Timestamp) {
+                    dataFormatada = DateFormat(
+                      'dd/MM/yyyy HH:mm',
+                    ).format(dv.toDate());
+                  }
+
+                  return ListTile(
+                    leading: const Icon(Icons.attach_money, color: Colors.pink),
+                    title: Text('Venda de R\$ ${total.toStringAsFixed(2)}'),
+                    subtitle: Text('Data: $dataFormatada'),
+                  );
+                },
+              ),
+            );
+          },
         );
       },
     );
+  }
+
+  /// Filtra vendas pela loja atual olhando os itens e puxando a loja do produto.
+  /// Regra: se a venda tiver pelo menos 1 item cuja loja do produto == lojaSelecionada, ela entra.
+  /// Se quiser exigir que TODOS os itens sejam da loja, eu ajusto a regra.
+  Future<List<QueryDocumentSnapshot>> _filtrarVendasPorLoja(
+    List<QueryDocumentSnapshot> docs,
+    String lojaSelecionada, {
+    int maxRetorno = 5,
+  }) async {
+    // 1) Coletar todos os códigos (codigoBarras) das vendas analisadas
+    final Set<String> codigos = {};
+
+    for (final d in docs) {
+      final data = d.data() as Map<String, dynamic>;
+      final itens = (data['itens'] as List?) ?? const [];
+      for (final it in itens) {
+        if (it is Map) {
+          final c = (it['codigoBarras'] ?? it['codigo'] ?? it['barcode'] ?? '')
+              .toString()
+              .trim();
+          if (c.isNotEmpty) codigos.add(c);
+        }
+      }
+    }
+
+    // Se não tem códigos, não dá pra descobrir loja
+    if (codigos.isEmpty) return [];
+
+    // 2) Buscar produtos em lote: codigoBarras -> loja
+    final Map<String, String> lojaPorCodigo = {};
+    final codesList = codigos.toList();
+
+    for (var i = 0; i < codesList.length; i += 10) {
+      final chunk = codesList.skip(i).take(10).toList();
+
+      final qs = await FirebaseFirestore.instance
+          .collection('produtos')
+          .where('codigoBarras', whereIn: chunk)
+          .get();
+
+      for (final p in qs.docs) {
+        final pd = p.data();
+        final codigo = (pd['codigoBarras'] ?? '').toString().trim();
+        final loja = (pd['loja'] ?? '').toString().trim();
+        if (codigo.isNotEmpty && loja.isNotEmpty) {
+          lojaPorCodigo[codigo] = loja;
+        }
+      }
+    }
+
+    // 3) Filtrar vendas
+    final List<QueryDocumentSnapshot> filtradas = [];
+
+    for (final d in docs) {
+      if (filtradas.length >= maxRetorno) break;
+
+      final data = d.data() as Map<String, dynamic>;
+      final itens = (data['itens'] as List?) ?? const [];
+
+      bool pertence = false;
+
+      for (final it in itens) {
+        if (it is Map) {
+          final c = (it['codigoBarras'] ?? it['codigo'] ?? it['barcode'] ?? '')
+              .toString()
+              .trim();
+          final lojaItem = lojaPorCodigo[c];
+
+          if (lojaItem != null && lojaItem == lojaSelecionada) {
+            pertence = true;
+            break;
+          }
+        }
+      }
+
+      if (pertence) filtradas.add(d);
+    }
+
+    return filtradas;
   }
 }

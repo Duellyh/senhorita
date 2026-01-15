@@ -22,7 +22,8 @@ import 'package:printing/printing.dart';
 import 'dart:ui' show FontFeature;
 
 class FinanceiroView extends StatefulWidget {
-  const FinanceiroView({super.key});
+  final String lojaSelecionada;
+  const FinanceiroView({super.key, required this.lojaSelecionada});
 
   @override
   State<FinanceiroView> createState() => _FinanceiroViewState();
@@ -48,6 +49,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
   Map<String, double> vendasPorCategoria = {};
   int _touchedIndexCategorias = -1;
   int _touchedIndexPagamentos = -1;
+  List<Map<String, dynamic>> _vendasDoPeriodo = [];
 
   int totalCanceladas = 0;
   double valorCancelado = 0;
@@ -61,6 +63,76 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     final status = (venda['status'] ?? '').toString().toLowerCase().trim();
     final flag = venda['cancelada'] == true;
     return flag || status == 'cancelada';
+  }
+
+  double _parseValorBr(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+
+    final s = v.toString().trim();
+    if (s.isEmpty) return 0.0;
+
+    final cleaned = s.replaceAll(RegExp(r'[^0-9,.-]'), '');
+    if (cleaned.contains(',') && cleaned.contains('.')) {
+      final semMilhar = cleaned.replaceAll('.', '').replaceAll(',', '.');
+      return double.tryParse(semMilhar) ?? 0.0;
+    }
+    if (cleaned.contains(',')) {
+      return double.tryParse(cleaned.replaceAll(',', '.')) ?? 0.0;
+    }
+    return double.tryParse(cleaned) ?? 0.0;
+  }
+
+  String _padronizarForma(dynamic forma) {
+    final f = removeDiacritics((forma ?? '').toString().toLowerCase().trim());
+    if (f.contains('pix')) return 'Pix';
+    if (f.contains('dinheiro')) return 'Dinheiro';
+    if (f.contains('credito') || f.contains('crédito')) return 'Crédito';
+    if (f.contains('debito') || f.contains('débito')) return 'Débito';
+    if (f.isEmpty) return 'Outros';
+    return f[0].toUpperCase() + f.substring(1);
+  }
+
+  Map<String, double> _somarPorForma(List<Map<String, dynamic>> vendas) {
+    final Map<String, double> totais = {};
+
+    for (final venda in vendas) {
+      // 👉 reaproveita sua regra existente
+      if (_isCancelada(venda)) continue;
+
+      final pagamentos = venda['pagamentos'];
+
+      // ✅ Caminho principal (correto): pagamentos = [{forma, valor}]
+      if (pagamentos is List && pagamentos.isNotEmpty) {
+        for (final p in pagamentos) {
+          if (p is Map) {
+            final forma = _padronizarForma(p['forma']);
+            final valor = _parseValorBr(p['valor']);
+
+            if (valor <= 0) continue;
+
+            totais[forma] = (totais[forma] ?? 0) + valor;
+          }
+        }
+        continue;
+      }
+
+      // 🔁 Fallback (casos antigos)
+      final formas = venda['formasPagamento'];
+      final totalPago = _parseValorBr(venda['totalPago']);
+
+      if (formas is List && formas.isNotEmpty && totalPago > 0) {
+        if (formas.length == 1) {
+          final forma = _padronizarForma(formas.first);
+          totais[forma] = (totais[forma] ?? 0) + totalPago;
+        } else {
+          // múltiplas formas sem valores → não inventa divisão
+          totais['Outros'] = (totais['Outros'] ?? 0) + totalPago;
+        }
+      }
+    }
+
+    return totais;
   }
 
   // seu array de categorias já existe:
@@ -546,9 +618,11 @@ class _FinanceiroViewState extends State<FinanceiroView> {
 
     // pendências de categoria a resolver por codigoBarras (somadas por código)
     final Map<String, double> pendentesPorCodigo = {}; // codigo -> soma R$
+    final List<Map<String, dynamic>> tempVendasDoPeriodo = [];
 
     for (var doc in snapshot.docs) {
       final dataDoc = doc.data();
+      tempVendasDoPeriodo.add(dataDoc);
 
       // ======= CANCELADAS (saem da contabilidade normal) =======
       if (_isCancelada(dataDoc)) {
@@ -694,6 +768,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
       // gráficos/contadores de canceladas
       canceladasPorDia = Map.from(tempCanceladasPorDia);
       canceladasPorMotivo = Map.from(tempCanceladasPorMotivo);
+      _vendasDoPeriodo = List.from(tempVendasDoPeriodo);
     });
   }
 
@@ -774,33 +849,50 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                 _menuItem(Icons.dashboard, 'Home', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeView()),
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          HomeView(lojaSelecionada: widget.lojaSelecionada),
+                    ),
                   );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const VendasView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VendasView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) => ProdutosView(
+                      lojaSelecionada:
+                          widget.lojaSelecionada, // 👈 usa a mesma loja
+                    ),
+                  ),
                 );
               }),
+
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AdicionarProdutosView(),
+                    builder: (_) => AdicionarProdutosView(
+                      lojaSelecionada: widget.lojaSelecionada,
+                    ),
                   ),
                 );
               }),
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               if (tipoUsuario == 'funcionario')
@@ -808,7 +900,9 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const VendasRealizadasView(),
+                      builder: (_) => VendasRealizadasView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -816,7 +910,11 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                    MaterialPageRoute(
+                      builder: (_) => RelatoriosView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
+                    ),
                   );
                 }),
               if (tipoUsuario == 'admin')
@@ -824,7 +922,9 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ConfiguracoesView(),
+                      builder: (_) => ConfiguracoesView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -921,7 +1021,10 @@ class _FinanceiroViewState extends State<FinanceiroView> {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: _buildPieChartPagamentos(showLegend: true),
+                  child: _buildPieChartPagamentos(
+                    _vendasDoPeriodo,
+                    showLegend: true,
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
@@ -1228,32 +1331,32 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     );
   }
 
-  Widget _buildPieChartPagamentos({bool showLegend = true}) {
+  Widget _buildPieChartPagamentos(
+    List<Map<String, dynamic>> vendasDoPeriodo, {
+    bool showLegend = true,
+  }) {
+    // monta mapa: forma -> R$
+    final formasPagamento = _somarPorForma(vendasDoPeriodo);
+
     if (formasPagamento.isEmpty) {
       return const Center(child: Text("Sem dados suficientes"));
     }
 
-    // Ordena por quantidade (desc) e agrupa o resto em "Outras"
     const int maxSlices = 6; // 5 maiores + "Outras"
     final entries = formasPagamento.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-    final List<MapEntry<String, int>> main = entries
-        .take(maxSlices - 1)
-        .toList();
-    final int others = entries
+    final main = entries.take(maxSlices - 1).toList();
+    final others = entries
         .skip(maxSlices - 1)
-        .fold(0, (s, e) => s + e.value);
+        .fold<double>(0.0, (s, e) => s + e.value);
 
-    final List<MapEntry<String, int>> toPlot = [
+    final toPlot = <MapEntry<String, double>>[
       ...main,
-      if (others > 0) const MapEntry('Outras', 0),
+      if (others > 0) MapEntry('Outras', others),
     ];
-    if (others > 0) {
-      toPlot[toPlot.length - 1] = MapEntry('Outras', others);
-    }
 
-    final int total = toPlot.fold(0, (s, e) => s + e.value);
+    final total = toPlot.fold<double>(0.0, (s, e) => s + e.value);
     if (total <= 0) {
       return const Center(child: Text("Sem dados suficientes"));
     }
@@ -1267,7 +1370,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
             PieChartData(
               startDegreeOffset: -90,
               sectionsSpace: 2,
-              centerSpaceRadius: 48, // donut
+              centerSpaceRadius: 48,
               pieTouchData: PieTouchData(
                 touchCallback: (event, resp) {
                   setState(() {
@@ -1279,16 +1382,15 @@ class _FinanceiroViewState extends State<FinanceiroView> {
               sections: List.generate(toPlot.length, (i) {
                 final e = toPlot[i];
                 final pct = e.value / total;
-                final bool isTouched = i == _touchedIndexPagamentos;
-                final bool showTitle =
-                    pct >= 0.06 || isTouched; // >=6% ou tocado
+                final isTouched = i == _touchedIndexPagamentos;
+                final showTitle = pct >= 0.06 || isTouched;
 
-                final String title = showTitle
-                    ? '${e.key}\nR\$ ${(e.value).toStringAsFixed(2)}\n(${(pct * 100).toStringAsFixed(0)}%)'
+                final title = showTitle
+                    ? '${e.key}\n${_brl2.format(e.value)}\n(${(pct * 100).toStringAsFixed(0)}%)'
                     : '';
 
                 return PieChartSectionData(
-                  value: e.value.toDouble(),
+                  value: e.value,
                   color: _getColorForPayment(e.key),
                   title: title,
                   radius: isTouched ? 72 : 62,
@@ -1309,7 +1411,10 @@ class _FinanceiroViewState extends State<FinanceiroView> {
     );
   }
 
-  Widget _buildLegendPagamentos(List<MapEntry<String, int>> data, int total) {
+  Widget _buildLegendPagamentos(
+    List<MapEntry<String, double>> data,
+    double total,
+  ) {
     return Wrap(
       spacing: 12,
       runSpacing: 8,
@@ -1328,7 +1433,7 @@ class _FinanceiroViewState extends State<FinanceiroView> {
             ),
             const SizedBox(width: 6),
             Text(
-              '${e.key}: R\$ ${(e.value).toStringAsFixed(2)} (${pct.toStringAsFixed(0)}%)',
+              '${e.key}: ${_brl2.format(e.value)} (${pct.toStringAsFixed(0)}%)',
               style: const TextStyle(fontSize: 12),
             ),
           ],
@@ -1338,18 +1443,19 @@ class _FinanceiroViewState extends State<FinanceiroView> {
   }
 
   Color _getColorForPayment(String forma) {
-    switch (forma.toLowerCase()) {
-      case 'pix':
-        return Colors.green;
-      case 'dinheiro':
-        return Colors.orange;
-      case 'cartão':
-      case 'cartao':
-        return Colors.blue;
-      default:
-        return Colors.grey;
-    }
+    final f = forma.toLowerCase().trim();
+    if (f == 'pix') return Colors.green;
+    if (f == 'dinheiro') return Colors.orange;
+    if (f == 'crédito' || f == 'credito') return Colors.blue;
+    if (f == 'débito' || f == 'debito') return Colors.purple;
+    return Colors.grey;
   }
+
+  final NumberFormat _brl2 = NumberFormat.currency(
+    locale: 'pt_BR',
+    symbol: 'R\$',
+    decimalDigits: 2,
+  );
 
   Widget _buildPieChartCanceladasMotivos() {
     if (canceladasPorMotivo.isEmpty) {

@@ -18,7 +18,12 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 class ProdutosView extends StatefulWidget {
-  const ProdutosView({super.key});
+  final String lojaSelecionada; // 👈 guarda a loja recebida
+
+  const ProdutosView({
+    super.key,
+    required this.lojaSelecionada, // 👈 agora o parâmetro é salvo no field
+  });
 
   @override
   State<ProdutosView> createState() => _ProdutosViewState();
@@ -33,6 +38,7 @@ class _ProdutosViewState extends State<ProdutosView> {
   final Color accentColor = const Color(0xFFec407a);
   String nomeUsuario = '';
   Timer? _debounce;
+  late final Stream<QuerySnapshot> _produtosStream;
 
   String _norm(String s) {
     // normaliza para comparar/buscar (minúsculo, sem acento, sem espaços múltiplos)
@@ -56,6 +62,12 @@ class _ProdutosViewState extends State<ProdutosView> {
   void initState() {
     super.initState();
     buscarTipoUsuario();
+
+    _produtosStream = FirebaseFirestore.instance
+        .collection('produtos')
+        .where('loja', isEqualTo: widget.lojaSelecionada)
+        .orderBy('dataCadastro', descending: true)
+        .snapshots();
   }
 
   Future<void> buscarTipoUsuario() async {
@@ -75,9 +87,19 @@ class _ProdutosViewState extends State<ProdutosView> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AdicionarProdutosView(produto: produto),
+        builder: (_) => AdicionarProdutosView(
+          produto: produto,
+          lojaSelecionada: widget.lojaSelecionada,
+        ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    searchController.dispose();
+    super.dispose();
   }
 
   Future<int> _buscarQuantidadeEstoque(String produtoId) async {
@@ -415,10 +437,12 @@ class _ProdutosViewState extends State<ProdutosView> {
     }
   }
 
-  Stream<QuerySnapshot> _buscarProdutosFirestore(String termo) {
-    // Sem depender do campo 'busca' no Firestore.
-    // Se quiser, pode filtrar por 'ativo': .where('ativo', isEqualTo: true)
-    return FirebaseFirestore.instance.collection('produtos').snapshots();
+  Stream<QuerySnapshot> _buscarProdutosFirestore(String trim) {
+    return FirebaseFirestore.instance
+        .collection('produtos')
+        .where('loja', isEqualTo: widget.lojaSelecionada)
+        .orderBy('dataCadastro', descending: true)
+        .snapshots();
   }
 
   @override
@@ -524,33 +548,50 @@ class _ProdutosViewState extends State<ProdutosView> {
                 _menuItem(Icons.dashboard, 'Home', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeView()),
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          HomeView(lojaSelecionada: widget.lojaSelecionada),
+                    ),
                   );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const VendasView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VendasView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) => ProdutosView(
+                      lojaSelecionada:
+                          widget.lojaSelecionada, // 👈 usa a mesma loja
+                    ),
+                  ),
                 );
               }),
+
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AdicionarProdutosView(),
+                    builder: (_) => AdicionarProdutosView(
+                      lojaSelecionada: widget.lojaSelecionada,
+                    ),
                   ),
                 );
               }),
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               if (tipoUsuario == 'funcionario')
@@ -558,7 +599,9 @@ class _ProdutosViewState extends State<ProdutosView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const VendasRealizadasView(),
+                      builder: (_) => VendasRealizadasView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -566,15 +609,22 @@ class _ProdutosViewState extends State<ProdutosView> {
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                    MaterialPageRoute(
+                      builder: (_) => RelatoriosView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
+                    ),
                   );
                 }),
+
               if (tipoUsuario == 'admin')
                 _menuItem(Icons.settings, 'Configurações', () {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ConfiguracoesView(),
+                      builder: (_) => ConfiguracoesView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -583,11 +633,24 @@ class _ProdutosViewState extends State<ProdutosView> {
         ),
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: _buscarProdutosFirestore(searchTerm.trim()),
+        stream: _produtosStream,
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Erro ao carregar produtos:\n${snapshot.error}',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }
+
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
+
           if (!snapshot.hasData) {
             return const Center(child: Text('Nenhum produto encontrado.'));
           }

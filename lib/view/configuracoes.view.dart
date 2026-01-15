@@ -14,7 +14,8 @@ import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
 
 class ConfiguracoesView extends StatefulWidget {
-  const ConfiguracoesView({super.key});
+  final String lojaSelecionada;
+  const ConfiguracoesView({super.key, required this.lojaSelecionada});
 
   @override
   State<ConfiguracoesView> createState() => _ConfiguracoesViewState();
@@ -209,33 +210,50 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
                 _menuItem(Icons.dashboard, 'Home', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeView()),
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          HomeView(lojaSelecionada: widget.lojaSelecionada),
+                    ),
                   );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const VendasView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VendasView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) => ProdutosView(
+                      lojaSelecionada:
+                          widget.lojaSelecionada, // 👈 usa a mesma loja
+                    ),
+                  ),
                 );
               }),
+
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AdicionarProdutosView(),
+                    builder: (_) => AdicionarProdutosView(
+                      lojaSelecionada: widget.lojaSelecionada,
+                    ),
                   ),
                 );
               }),
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               if (tipoUsuario == 'funcionario')
@@ -243,7 +261,9 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const VendasRealizadasView(),
+                      builder: (_) => VendasRealizadasView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -251,7 +271,11 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                    MaterialPageRoute(
+                      builder: (_) => RelatoriosView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
+                    ),
                   );
                 }),
               if (tipoUsuario == 'admin')
@@ -259,7 +283,9 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ConfiguracoesView(),
+                      builder: (_) => ConfiguracoesView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -285,7 +311,9 @@ class _ConfiguracoesViewState extends State<ConfiguracoesView> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => const GerenciarUsuariosView(),
+                  builder: (_) => GerenciarUsuariosView(
+                    lojaSelecionada: widget.lojaSelecionada,
+                  ),
                 ),
               );
             },

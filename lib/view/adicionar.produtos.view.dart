@@ -20,8 +20,13 @@ import 'package:printing/printing.dart';
 import 'package:barcode_widget/barcode_widget.dart';
 
 class AdicionarProdutosView extends StatefulWidget {
+  final String lojaSelecionada;
   final DocumentSnapshot? produto;
-  const AdicionarProdutosView({super.key, this.produto});
+  const AdicionarProdutosView({
+    super.key,
+    this.produto,
+    required this.lojaSelecionada,
+  });
 
   @override
   State<AdicionarProdutosView> createState() => _AdicionarProdutoPageState();
@@ -338,12 +343,22 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
       final descricao = descricaoController.text.trim().toUpperCase();
       final categoria = categoriaSelecionada ?? 'Não definido';
 
+      final loja = widget.lojaSelecionada.trim();
+      if (loja.isEmpty) {
+        if (context.mounted) Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Loja não definida. Faça login novamente.'),
+          ),
+        );
+        return;
+      }
       // --------- Base do documento (sem campos que possam exigir delete) ---------
       final Map<String, dynamic> base = {
         'nome': nome,
         'descricao': descricao,
         'cor': corSelecionada ?? '',
-        'loja': lojaSelecionada,
+        'loja': loja,
         'foto': fotoUrl ?? '',
         if (tipoUsuario != 'funcionario')
           'valorReal': _converterParaDouble(valorRealController.text),
@@ -417,7 +432,10 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                 Navigator.pop(context); // fecha este diálogo
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ProdutosView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               },
               child: const Text('OK'),
@@ -508,33 +526,50 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                 _menuItem(Icons.dashboard, 'Home', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const HomeView()),
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          HomeView(lojaSelecionada: widget.lojaSelecionada),
+                    ),
                   );
                 }),
               _menuItem(Icons.attach_money, 'Vender', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const VendasView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VendasView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               _menuItem(Icons.checkroom, 'Produtos', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProdutosView()),
+                  MaterialPageRoute(
+                    builder: (_) => ProdutosView(
+                      lojaSelecionada:
+                          widget.lojaSelecionada, // 👈 usa a mesma loja
+                    ),
+                  ),
                 );
               }),
+
               _menuItem(Icons.add_box, 'Adicionar Produto', () {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AdicionarProdutosView(),
+                    builder: (_) => AdicionarProdutosView(
+                      lojaSelecionada: widget.lojaSelecionada,
+                    ),
                   ),
                 );
               }),
               _menuItem(Icons.people, 'Clientes', () {
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (_) => const ClientesView()),
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
+                  ),
                 );
               }),
               if (tipoUsuario == 'funcionario')
@@ -542,7 +577,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const VendasRealizadasView(),
+                      builder: (_) => VendasRealizadasView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -550,7 +587,11 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                 _menuItem(Icons.show_chart, 'Relatórios', () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => const RelatoriosView()),
+                    MaterialPageRoute(
+                      builder: (_) => RelatoriosView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
+                    ),
                   );
                 }),
               if (tipoUsuario == 'admin')
@@ -558,7 +599,9 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ConfiguracoesView(),
+                      builder: (_) => ConfiguracoesView(
+                        lojaSelecionada: widget.lojaSelecionada,
+                      ),
                     ),
                   );
                 }),
@@ -1016,7 +1059,11 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
 
                       // redireciona para ProdutosView
                       Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute(builder: (_) => const ProdutosView()),
+                        MaterialPageRoute(
+                          builder: (_) => ProdutosView(
+                            lojaSelecionada: widget.lojaSelecionada,
+                          ),
+                        ),
                         (route) => false,
                       );
                     },
