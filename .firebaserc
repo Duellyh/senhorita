@@ -1,0 +1,13 @@
+{
+  "projects": {},
+  "targets": {
+    "senhorita-5c5fd": {
+      "hosting": {
+        "senhorita-web": [
+          "sistema-senhorita"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
