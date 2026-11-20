@@ -1,11 +1,15 @@
-// ignore_for_file: use_build_context_synchronously
 import 'dart:async';
 
+import 'package:barcode_widget/barcode_widget.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:senhorita/view/adicionar.produtos.view.dart';
-import 'package:barcode_widget/barcode_widget.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/home.view.dart';
@@ -13,971 +17,1212 @@ import 'package:senhorita/view/login.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 class ProdutosView extends StatefulWidget {
-  final String lojaSelecionada; // 👈 guarda a loja recebida
+  const ProdutosView({super.key, required this.lojaSelecionada});
 
-  const ProdutosView({
-    super.key,
-    required this.lojaSelecionada, // 👈 agora o parâmetro é salvo no field
-  });
+  final String lojaSelecionada;
 
   @override
   State<ProdutosView> createState() => _ProdutosViewState();
 }
 
+const _fundo = Color(0xFFFAF7F9);
+const _texto = Color(0xFF301F2C);
+const _suave = Color(0xFF695763);
+const _marca = Color(0xFF832958);
+const _rosaClaro = Color(0xFFF8EAF2);
+const _borda = Color(0xFFEADDE5);
+const _aviso = Color(0xFF8C500F);
+const _avisoClaro = Color(0xFFFFF1DE);
+const _erro = Color(0xFF9E2940);
+
+final _moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+final _numero = NumberFormat.decimalPattern('pt_BR');
+
 class _ProdutosViewState extends State<ProdutosView> {
-  String searchTerm = '';
-  TextEditingController searchController = TextEditingController();
-  String tipoUsuario = '';
-  final user = FirebaseAuth.instance.currentUser;
-  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
-  final Color accentColor = const Color(0xFFec407a);
-  String nomeUsuario = '';
+  final _db = FirebaseFirestore.instance;
+  final _buscaController = TextEditingController();
+  final _excluindo = <String>{};
+  final _imprimindo = <String>{};
+  late Stream<_Catalogo> _catalogo;
+
+  String _busca = '';
+  String _tipoUsuario = '';
+  String _nomeUsuario = '';
+  bool _saindo = false;
   Timer? _debounce;
-  late final Stream<QuerySnapshot> _produtosStream;
 
-  String _norm(String s) {
-    // normaliza para comparar/buscar (minúsculo, sem acento, sem espaços múltiplos)
-    final lower = s.toLowerCase().trim();
-    const comAcento = 'áàâãäéèêëíìîïóòôõöúùûüçñ';
-    const semAcento = 'aaaaaeeeeiiiiooooouuuucn';
-    var out = lower;
-    for (int i = 0; i < comAcento.length; i++) {
-      out = out.replaceAll(comAcento[i], semAcento[i]);
-    }
-    return out.replaceAll(RegExp(r'\s+'), ' ');
-  }
-
-  List<String> _tokenize(String termo) {
-    return _norm(
-      termo,
-    ).split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-  }
+  String get _loja => widget.lojaSelecionada.trim();
 
   @override
   void initState() {
     super.initState();
-    buscarTipoUsuario();
-
-    _produtosStream = FirebaseFirestore.instance
-        .collection('produtos')
-        .where('loja', isEqualTo: widget.lojaSelecionada)
-        .orderBy('dataCadastro', descending: true)
-        .snapshots();
+    _catalogo = _observarProdutos(_loja);
+    _carregarPerfil();
   }
 
-  Future<void> buscarTipoUsuario() async {
-    if (user != null) {
-      final doc = await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(user!.uid)
-          .get();
-      setState(() {
-        tipoUsuario = doc['tipo'] ?? 'funcionario';
-        nomeUsuario = doc['nome'] ?? 'Usuário';
-      });
+  @override
+  void didUpdateWidget(covariant ProdutosView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.lojaSelecionada.trim() != _loja) {
+      _catalogo = _observarProdutos(_loja);
     }
-  }
-
-  void _editarProduto(BuildContext context, DocumentSnapshot produto) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => AdicionarProdutosView(
-          produto: produto,
-          lojaSelecionada: widget.lojaSelecionada,
-        ),
-      ),
-    );
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
-    searchController.dispose();
+    _buscaController.dispose();
     super.dispose();
   }
 
-  Future<int> _buscarQuantidadeEstoque(String produtoId) async {
-    final estoqueSnapshot = await FirebaseFirestore.instance
+  Stream<_Catalogo> _observarProdutos(String loja) {
+    if (loja.isEmpty) return const Stream.empty();
+
+    final indice = <String, _Produto>{};
+    return _db
         .collection('produtos')
-        .where('codigoBarras', isEqualTo: produtoId)
-        .limit(1)
-        .get();
-
-    if (estoqueSnapshot.docs.isNotEmpty) {
-      return estoqueSnapshot.docs.first.data()['quantidade'] ?? 0;
-    }
-    return 0;
+        .where('loja', isEqualTo: loja)
+        .orderBy('dataCadastro', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          // Só refaz o índice de busca dos documentos que mudaram.
+          for (final alteracao in snapshot.docChanges) {
+            indice.remove(alteracao.doc.id);
+          }
+          return _Catalogo([
+            for (final documento in snapshot.docs)
+              indice.putIfAbsent(documento.id, () => _Produto(documento)),
+          ]);
+        });
   }
 
-  void _mostrarEtiquetaDialog(BuildContext context, DocumentSnapshot produto) {
-    final data = produto.data() as Map<String, dynamic>;
-    final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
-    final tc = data['tamanhosCores'] as Map<String, dynamic>?;
+  Future<void> _carregarPerfil() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
 
-    final bool temGrade = tc != null && tc.isNotEmpty;
-    String? tamanhoSelecionado;
-    String? corSelecionadaEtiqueta;
-
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        Printer? impressoraSelecionada;
-
-        return FutureBuilder<List<Printer>>(
-          future: Printing.listPrinters(),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const AlertDialog(
-                content: SizedBox(
-                  height: 100,
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              );
-            }
-
-            final impressoras = snapshot.data!;
-
-            // Seleciona automaticamente a impressora ELGIN L42PRO FULL, se disponível
-            if (impressoraSelecionada == null) {
-              impressoraSelecionada = impressoras.firstWhere(
-                (p) => p.name == 'ELGIN L42PRO ETIQUETA',
-                orElse: () => impressoras.first,
-              );
-            }
-
-            return StatefulBuilder(
-              builder: (ctx, setState) => AlertDialog(
-                title: const Text('Imprimir Etiqueta'),
-                content: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Produto: ${data['nome'] ?? '-'}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      if (temGrade) ...[
-                        DropdownButtonFormField<String>(
-                          value: tamanhoSelecionado,
-                          decoration: const InputDecoration(
-                            labelText: 'Selecione o Tamanho',
-                          ),
-                          items: tc.keys.map((tam) {
-                            return DropdownMenuItem(
-                              value: tam,
-                              child: Text(tam),
-                            );
-                          }).toList(),
-                          onChanged: (value) => setState(() {
-                            tamanhoSelecionado = value;
-                            corSelecionadaEtiqueta =
-                                null; // reset cor ao trocar tamanho
-                          }),
-                        ),
-                        const SizedBox(height: 8),
-                        DropdownButtonFormField<String>(
-                          value: corSelecionadaEtiqueta,
-                          decoration: const InputDecoration(
-                            labelText: 'Selecione a Cor',
-                          ),
-                          items: (tamanhoSelecionado == null)
-                              ? const []
-                              : (tc[tamanhoSelecionado] as Map).keys
-                                    .map<DropdownMenuItem<String>>((cor) {
-                                      return DropdownMenuItem(
-                                        value: cor.toString(),
-                                        child: Text(cor.toString()),
-                                      );
-                                    })
-                                    .toList(),
-                          onChanged: (value) =>
-                              setState(() => corSelecionadaEtiqueta = value),
-                        ),
-                      ] else if (tamanhos != null && tamanhos.isNotEmpty) ...[
-                        DropdownButtonFormField<String>(
-                          value: tamanhoSelecionado,
-                          decoration: const InputDecoration(
-                            labelText: 'Selecione o Tamanho',
-                          ),
-                          items: tamanhos.keys.map((tam) {
-                            return DropdownMenuItem(
-                              value: tam,
-                              child: Text(tam),
-                            );
-                          }).toList(),
-                          onChanged: (value) =>
-                              setState(() => tamanhoSelecionado = value),
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<Printer>(
-                        value: impressoraSelecionada,
-                        decoration: const InputDecoration(
-                          labelText: 'Selecionar Impressora',
-                        ),
-                        items: impressoras.map((printer) {
-                          return DropdownMenuItem(
-                            value: printer,
-                            child: Text(printer.name),
-                          );
-                        }).toList(),
-                        onChanged: (value) =>
-                            setState(() => impressoraSelecionada = value),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Preço: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: 200,
-                        height: 60,
-                        child: BarcodeWidget(
-                          barcode: Barcode.code128(),
-                          data: produto['codigoBarras'] ?? '',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Cancelar'),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      if (temGrade) {
-                        if (tamanhoSelecionado == null ||
-                            corSelecionadaEtiqueta == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Selecione tamanho e cor.'),
-                            ),
-                          );
-                          return;
-                        }
-                      } else if (tamanhos != null && tamanhos.isNotEmpty) {
-                        if (tamanhoSelecionado == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Selecione um tamanho.'),
-                            ),
-                          );
-                          return;
-                        }
-                      }
-
-                      if (impressoraSelecionada == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Selecione uma impressora.'),
-                          ),
-                        );
-                        return;
-                      }
-
-                      Navigator.pop(ctx);
-                      _imprimirEtiquetaDupla(
-                        data,
-                        produto.id,
-                        tamanhoSelecionado,
-                        impressoraSelecionada!,
-                        corSelecionadaEtiqueta: temGrade
-                            ? corSelecionadaEtiqueta
-                            : null,
-                      );
-                    },
-                    child: const Text('Imprimir'),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  void _imprimirEtiquetaDupla(
-    Map<String, dynamic> data,
-    String id,
-    String? tamanhoSelecionado,
-    Printer impressoraSelecionada, {
-    String? corSelecionadaEtiqueta,
-  }) async {
-    final doc = pw.Document();
-
-    // Tamanho ajustado para caber duas etiquetas na largura de 90mm
-    const double etiquetaLargura = 36 * PdfPageFormat.mm;
-    const double etiquetaAltura = 25 * PdfPageFormat.mm;
-
-    final codigo = data['codigoBarras'] ?? '';
-
-    pw.Widget _etiqueta() {
-      return pw.Container(
-        width: etiquetaLargura,
-        height: etiquetaAltura,
-        padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-        child: pw.Column(
-          mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
-          crossAxisAlignment: pw.CrossAxisAlignment.center,
-          children: [
-            pw.Text(
-              (data['nome'] ?? 'Sem nome').toString().length > 20
-                  ? '${data['nome'].toString().substring(0, 20)}…'
-                  : data['nome'] ?? 'Sem nome',
-              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-              maxLines: 1,
-              textAlign: pw.TextAlign.center,
-            ),
-            if (tamanhoSelecionado != null)
-              pw.Text(
-                'Tam: $tamanhoSelecionado',
-                style: const pw.TextStyle(fontSize: 6),
-                textAlign: pw.TextAlign.center,
-              ),
-            pw.Text(
-              'R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
-              style: const pw.TextStyle(fontSize: 6),
-              textAlign: pw.TextAlign.center,
-            ),
-            pw.BarcodeWidget(
-              barcode: Barcode.code128(),
-              data: codigo,
-              width: 100,
-              height: 30,
-              drawText: false,
-            ),
-            pw.Text(
-              codigo,
-              style: const pw.TextStyle(fontSize: 6),
-              textAlign: pw.TextAlign.center,
-            ),
-          ],
-        ),
-      );
-    }
-
-    doc.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat(
-          90 * PdfPageFormat.mm, // largura total do papel
-          etiquetaAltura,
-        ),
-        margin: const pw.EdgeInsets.symmetric(horizontal: 4 * PdfPageFormat.mm),
-        build: (context) {
-          return pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.center,
-            children: [
-              _etiqueta(),
-              pw.SizedBox(width: 10), // espaço entre etiquetas
-              _etiqueta(),
-            ],
-          );
-        },
-      ),
-    );
-
-    // Enviar diretamente para a impressora
-    await Printing.directPrintPdf(
-      printer: impressoraSelecionada,
-      onLayout: (_) => doc.save(),
-    );
-  }
-
-  Future<void> corrigirCampoAtivo() async {
-    final produtos = await FirebaseFirestore.instance
-        .collection('produtos')
-        .get();
-
-    for (var doc in produtos.docs) {
-      final data = doc.data();
-      final ativo = data['ativo'];
-
-      if (ativo is num) {
-        final boolAtivo = ativo != 0;
-        await doc.reference.update({'ativo': boolAtivo});
-        debugPrint('Corrigido ${doc.id}: ativo = $boolAtivo');
+    try {
+      final perfil = (await _db.collection('usuarios').doc(uid).get()).data();
+      if (!mounted) return;
+      setState(() {
+        _tipoUsuario = _campo(perfil?['tipo'], 'funcionario');
+        _nomeUsuario = _campo(perfil?['nome'], 'Usuário');
+      });
+    } catch (erro) {
+      debugPrint('Produtos • perfil: $erro');
+      if (mounted) {
+        _mensagem('Não foi possível carregar o perfil do usuário.');
       }
     }
-
-    debugPrint('✅ Todos os campos "ativo" foram corrigidos.');
   }
 
-  void _excluirProduto(BuildContext context, String id, String nome) async {
-    final confirm = await showDialog<bool>(
+  void _alterarBusca(String valor) {
+    _debounce?.cancel();
+    final busca = _normalizar(valor);
+    if (busca == _busca) return;
+    if (busca.isEmpty) {
+      setState(() => _busca = '');
+      return;
+    }
+
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) setState(() => _busca = busca);
+    });
+  }
+
+  void _limparBusca() {
+    _buscaController.clear();
+    _alterarBusca('');
+  }
+
+  void _recarregar() {
+    setState(() => _catalogo = _observarProdutos(_loja));
+  }
+
+  void _mensagem(String texto) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(texto)));
+  }
+
+  void _abrirCadastro([_Produto? produto]) {
+    if (_loja.isEmpty) {
+      _mensagem('Selecione uma loja primeiro.');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    final loja = _loja;
+    final navegador = Navigator.of(context);
+    final rota = MaterialPageRoute<void>(
+      builder: (_) => AdicionarProdutosView(
+        produto: produto?.documento,
+        lojaSelecionada: loja,
+      ),
+    );
+    if (produto == null) {
+      navegador.pushReplacement<void, void>(rota);
+    } else {
+      navegador.push<void>(rota);
+    }
+  }
+
+  Future<void> _sair() async {
+    if (_saindo) return;
+
+    setState(() => _saindo = true);
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(builder: (_) => const LoginView()),
+        (_) => false,
+      );
+    } catch (erro) {
+      debugPrint('Produtos • saída: $erro');
+      if (!mounted) return;
+      setState(() => _saindo = false);
+      _mensagem('Não foi possível sair. Tente novamente.');
+    }
+  }
+
+  Future<void> _excluirProduto(_Produto produto) async {
+    if (_excluindo.contains(produto.id)) return;
+    final loja = _loja;
+    final confirmou = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Excluir Produto'),
-        content: Text('Tem certeza que deseja excluir o produto "$nome"?'),
+      builder: (contexto) => AlertDialog(
+        title: const Text('Excluir produto?'),
+        content: Text('Deseja excluir o produto “${produto.nome}”?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
+            onPressed: () => Navigator.of(contexto).pop(false),
             child: const Text('Cancelar'),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _erro),
+            onPressed: () => Navigator.of(contexto).pop(true),
             child: const Text('Excluir'),
           ),
         ],
       ),
     );
 
-    if (confirm == true) {
-      await FirebaseFirestore.instance.collection('produtos').doc(id).delete();
+    if (!mounted || confirmou != true || _loja != loja) return;
+    setState(() => _excluindo.add(produto.id));
+    try {
+      await produto.documento.reference.delete();
+      if (mounted) _mensagem('Produto excluído.');
+    } catch (erro) {
+      debugPrint('Produtos • exclusão: $erro');
+      if (mounted) _mensagem('Não foi possível excluir o produto.');
+    } finally {
+      if (mounted) setState(() => _excluindo.remove(produto.id));
     }
   }
 
-  Stream<QuerySnapshot> _buscarProdutosFirestore(String trim) {
-    return FirebaseFirestore.instance
-        .collection('produtos')
-        .where('loja', isEqualTo: widget.lojaSelecionada)
-        .orderBy('dataCadastro', descending: true)
-        .snapshots();
+  Future<void> _mostrarEtiqueta(_Produto produto) async {
+    if (_imprimindo.contains(produto.id)) return;
+    final codigo = produto.codigo;
+    if (codigo.isEmpty) {
+      _mensagem('Este produto ainda não tem código de barras.');
+      return;
+    }
+
+    try {
+      Barcode.code128().verify(codigo);
+    } catch (erro) {
+      debugPrint('Produtos • código de barras: $erro');
+      _mensagem('O código de barras deste produto é inválido.');
+      return;
+    }
+
+    setState(() => _imprimindo.add(produto.id));
+    try {
+      final pedido = await showDialog<_PedidoEtiqueta>(
+        context: context,
+        builder: (_) => _DialogoEtiqueta(produto: produto),
+      );
+      if (!mounted || pedido == null) return;
+
+      final enviado = await _imprimirEtiquetaDupla(produto, pedido);
+      if (mounted) {
+        _mensagem(
+          enviado
+              ? 'Etiqueta enviada à impressora.'
+              : 'A impressora não concluiu o envio.',
+        );
+      }
+    } catch (erro) {
+      debugPrint('Produtos • impressão: $erro');
+      if (mounted) _mensagem('Não foi possível imprimir a etiqueta.');
+    } finally {
+      if (mounted) setState(() => _imprimindo.remove(produto.id));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final loja = _loja;
     return Scaffold(
+      backgroundColor: _fundo,
       appBar: AppBar(
-        backgroundColor: const Color.fromARGB(255, 194, 131, 178),
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: Stack(
-          alignment: Alignment.center,
+        backgroundColor: Colors.white,
+        foregroundColor: _marca,
+        elevation: 0,
+        toolbarHeight: 76,
+        titleSpacing: 4,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Senhorita Cintas Modeladores',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 22,
-                ),
+            const Text(
+              'Produtos',
+              style: TextStyle(
+                color: _texto,
+                fontWeight: FontWeight.w700,
+                fontSize: 17,
               ),
             ),
-            const Center(
-              child: Text(
-                'PRODUTOS',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 22,
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(Icons.storefront_outlined, size: 16, color: _marca),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Tooltip(
+                    message: loja.isEmpty ? 'Loja ativa' : 'Loja ativa: $loja',
+                    child: Text(
+                      loja.isEmpty ? 'Nenhuma loja selecionada' : loja,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _marca,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white),
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginView()),
-              );
-            },
+            tooltip: 'Atualizar catálogo',
+            onPressed: loja.isEmpty ? null : _recarregar,
+            icon: const Icon(Icons.refresh),
           ),
+          IconButton(
+            tooltip: 'Sair',
+            onPressed: _saindo ? null : _sair,
+            icon: const Icon(Icons.logout),
+          ),
+          const SizedBox(width: 4),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(56),
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: TextField(
-              controller: searchController,
-              onChanged: (value) {
-                _debounce?.cancel();
-                _debounce = Timer(const Duration(milliseconds: 250), () {
-                  setState(() {
-                    searchTerm = value;
-                  });
-                });
-              },
-              decoration: InputDecoration(
-                hintText: 'Buscar por nome e ID',
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(1),
+          child: Divider(height: 1, color: _borda),
+        ),
+      ),
+      drawer: _menu(loja),
+      body: SafeArea(
+        child: loja.isEmpty
+            ? const Center(
+                child: Text('Selecione uma loja para ver os produtos.'),
+              )
+            : LayoutBuilder(
+                builder: (context, limites) {
+                  final margem = limites.maxWidth >= 720 ? 32.0 : 16.0;
+                  final largura = (limites.maxWidth - margem * 2)
+                      .clamp(0.0, 1280.0)
+                      .toDouble();
+                  return Center(
+                    child: SizedBox(
+                      width: largura,
+                      child: StreamBuilder<_Catalogo>(
+                        key: ValueKey(loja),
+                        stream: _catalogo,
+                        builder: (context, snapshot) {
+                          return _lista(snapshot, largura);
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
+      ),
+    );
+  }
+
+  Widget _menu(String loja) {
+    return Drawer(
+      backgroundColor: Colors.white,
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(12),
+          children: [
+            ListTile(
+              leading: const Icon(Icons.storefront_outlined, color: _marca),
+              title: Text(
+                _nomeUsuario.isEmpty ? 'Senhorita' : _nomeUsuario,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: loja.isEmpty ? null : Text(loja),
+            ),
+            const Divider(color: _borda),
+            if (_tipoUsuario == 'admin')
+              _linkMenu(Icons.dashboard_outlined, 'Início', () {
+                return HomeView(lojaSelecionada: loja);
+              }),
+            _linkMenu(Icons.point_of_sale, 'Nova venda', () {
+              return VendasView(lojaSelecionada: loja);
+            }),
+            ListTile(
+              leading: const Icon(Icons.checkroom),
+              title: const Text('Produtos'),
+              selected: true,
+              selectedColor: _marca,
+              selectedTileColor: _rosaClaro,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              onTap: () => Navigator.of(context).pop(),
+            ),
+            _linkMenu(Icons.add_box_outlined, 'Adicionar produto', () {
+              return AdicionarProdutosView(lojaSelecionada: loja);
+            }),
+            _linkMenu(Icons.people_outline, 'Clientes', () {
+              return ClientesView(lojaSelecionada: loja);
+            }),
+            if (_tipoUsuario == 'funcionario')
+              _linkMenu(Icons.receipt_long_outlined, 'Vendas realizadas', () {
+                return VendasRealizadasView(lojaSelecionada: loja);
+              }),
+            if (_tipoUsuario == 'admin') ...[
+              _linkMenu(Icons.bar_chart, 'Relatórios', () {
+                return RelatoriosView(lojaSelecionada: loja);
+              }),
+              _linkMenu(Icons.settings_outlined, 'Configurações', () {
+                return ConfiguracoesView(lojaSelecionada: loja);
+              }),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _linkMenu(IconData icone, String rotulo, Widget Function() pagina) {
+    return ListTile(
+      leading: Icon(icone, color: _suave),
+      title: Text(rotulo),
+      onTap: () {
+        final navegador = Navigator.of(context);
+        navegador.pop();
+        if (_loja.isEmpty) {
+          _mensagem('Selecione uma loja primeiro.');
+          return;
+        }
+        navegador.pushReplacement<void, void>(
+          MaterialPageRoute<void>(builder: (_) => pagina()),
+        );
+      },
+    );
+  }
+
+  Widget _lista(AsyncSnapshot<_Catalogo> snapshot, double largura) {
+    final catalogo = snapshot.data;
+    final produtos = catalogo?.filtrar(_busca) ?? const <_Produto>[];
+    final colunas = largura >= 1100 ? 3 : (largura >= 700 ? 2 : 1);
+
+    return CustomScrollView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      slivers: [
+        SliverToBoxAdapter(
+          child: _painelBusca(largura, catalogo, produtos.length),
+        ),
+        if (snapshot.hasError)
+          SliverToBoxAdapter(
+            child: _estado(
+              'Não foi possível carregar os produtos.',
+              acao: TextButton(
+                onPressed: _recarregar,
+                child: const Text('Tentar novamente'),
+              ),
+            ),
+          )
+        else if (catalogo == null)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: CircularProgressIndicator(color: _marca)),
+            ),
+          )
+        else if (produtos.isEmpty)
+          SliverToBoxAdapter(
+            child: _estado(
+              _busca.isEmpty
+                  ? 'Nenhum produto cadastrado nesta loja.'
+                  : 'Nenhum produto encontrado para essa busca.',
+              acao: _busca.isEmpty
+                  ? null
+                  : TextButton(
+                      onPressed: _limparBusca,
+                      child: const Text('Limpar busca'),
+                    ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.only(bottom: 24),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, linha) => _linhaDeProdutos(produtos, linha, colunas),
+                childCount: (produtos.length + colunas - 1) ~/ colunas,
               ),
             ),
           ),
+      ],
+    );
+  }
+
+  Widget _painelBusca(double largura, _Catalogo? catalogo, int resultados) {
+    final campoBusca = TextField(
+      controller: _buscaController,
+      onChanged: _alterarBusca,
+      onSubmitted: (_) => FocusScope.of(context).unfocus(),
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        labelText: 'Buscar produtos',
+        hintText: 'Nome, código, categoria, tamanho ou cor',
+        prefixIcon: const Icon(Icons.search, color: _marca),
+        suffixIcon: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _buscaController,
+          builder: (context, valor, _) => valor.text.isEmpty
+              ? const SizedBox.shrink()
+              : IconButton(
+                  tooltip: 'Limpar busca',
+                  onPressed: _limparBusca,
+                  icon: const Icon(Icons.clear),
+                ),
+        ),
+        filled: true,
+        fillColor: Colors.white,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: _borda),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: _marca, width: 1.5),
         ),
       ),
-      drawer: Drawer(
-        child: Container(
-          color: primaryColor,
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              DrawerHeader(
-                decoration: BoxDecoration(color: accentColor),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.store, color: Colors.white, size: 48),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Olá, ${nomeUsuario.toUpperCase()}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+    );
+    final adicionar = FilledButton.icon(
+      onPressed: () => _abrirCadastro(),
+      style: FilledButton.styleFrom(
+        backgroundColor: _marca,
+        foregroundColor: Colors.white,
+        minimumSize: const Size(0, 52),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      ),
+      icon: const Icon(Icons.add),
+      label: const Text('Adicionar produto'),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (largura >= 600)
+            Row(
+              children: [
+                Expanded(child: campoBusca),
+                const SizedBox(width: 12),
+                adicionar,
+              ],
+            )
+          else ...[
+            campoBusca,
+            const SizedBox(height: 10),
+            adicionar,
+          ],
+          if (catalogo != null) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _tag(
+                  '${_numero.format(catalogo.produtos.length)} cadastrados',
+                  icone: Icons.checkroom,
                 ),
-              ),
-              if (tipoUsuario == 'admin')
-                _menuItem(Icons.dashboard, 'Home', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          HomeView(lojaSelecionada: widget.lojaSelecionada),
-                    ),
-                  );
-                }),
-              _menuItem(Icons.attach_money, 'Vender', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        VendasView(lojaSelecionada: widget.lojaSelecionada),
-                  ),
-                );
-              }),
-              _menuItem(Icons.checkroom, 'Produtos', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ProdutosView(
-                      lojaSelecionada:
-                          widget.lojaSelecionada, // 👈 usa a mesma loja
-                    ),
-                  ),
-                );
-              }),
+                _tag(
+                  '${_numero.format(catalogo.estoqueBaixo)} com estoque baixo',
+                  aviso: catalogo.estoqueBaixo > 0,
+                  icone: Icons.inventory_2_outlined,
+                ),
+                if (_busca.isNotEmpty)
+                  _tag('${_numero.format(resultados)} na busca'),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
-              _menuItem(Icons.add_box, 'Adicionar Produto', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => AdicionarProdutosView(
-                      lojaSelecionada: widget.lojaSelecionada,
-                    ),
-                  ),
-                );
-              }),
-              _menuItem(Icons.people, 'Clientes', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
-                  ),
-                );
-              }),
-              if (tipoUsuario == 'funcionario')
-                _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => VendasRealizadasView(
-                        lojaSelecionada: widget.lojaSelecionada,
-                      ),
-                    ),
-                  );
-                }),
-              if (tipoUsuario == 'admin')
-                _menuItem(Icons.show_chart, 'Relatórios', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => RelatoriosView(
-                        lojaSelecionada: widget.lojaSelecionada,
-                      ),
-                    ),
-                  );
-                }),
-
-              if (tipoUsuario == 'admin')
-                _menuItem(Icons.settings, 'Configurações', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ConfiguracoesView(
-                        lojaSelecionada: widget.lojaSelecionada,
-                      ),
-                    ),
-                  );
-                }),
-            ],
-          ),
+  Widget _estado(String texto, {Widget? acao}) {
+    return _superficie(
+      Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            Text(texto, textAlign: TextAlign.center),
+            if (acao != null) acao,
+          ],
         ),
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: _produtosStream,
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'Erro ao carregar produtos:\n${snapshot.error}',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          }
+    );
+  }
 
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+  Widget _linhaDeProdutos(List<_Produto> produtos, int linha, int colunas) {
+    final inicio = linha * colunas;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var coluna = 0; coluna < colunas; coluna++) ...[
+            if (coluna > 0) const SizedBox(width: 12),
+            Expanded(
+              child: inicio + coluna < produtos.length
+                  ? _cartao(produtos[inicio + coluna])
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
-          if (!snapshot.hasData) {
-            return const Center(child: Text('Nenhum produto encontrado.'));
-          }
-
-          final produtosRaw = snapshot.data!.docs;
-
-          final palavrasBusca = _tokenize(searchTerm);
-          final bool temBusca = palavrasBusca.isNotEmpty;
-
-          String _alvoProduto(DocumentSnapshot doc) {
-            final d = doc.data() as Map<String, dynamic>;
-            final codigo = (d['codigoBarras'] ?? doc.id).toString();
-            final nome = (d['nome'] ?? '').toString();
-
-            final cor = (d['cor'] ?? '')
-                .toString(); // cor “principal” (opcional)
-            final loja = (d['loja'] ?? '').toString();
-            final desc = (d['descricao'] ?? '').toString();
-
-            // inclui tamanhos (somatório) e as variantes Tamanho×Cor no texto de busca
-            final tamanhos =
-                (d['tamanhos'] as Map?)?.keys
-                    .map((e) => e.toString())
-                    .join(' ') ??
-                '';
-            final tc = d['tamanhosCores'] as Map<String, dynamic>?;
-            final variantesStr = tc == null
-                ? ''
-                : tc.entries
-                      .expand((e) {
-                        final tam = e.key;
-                        final cores = (e.value as Map).keys.map(
-                          (c) => '$tam $c',
-                        );
-                        return cores;
-                      })
-                      .join(' ');
-
-            return _norm(
-              '$nome $codigo $cor $loja $desc $tamanhos $variantesStr',
-            );
-          }
-
-          // AND para todas as palavras; a última pode ser parcial (já que está digitando)
-          final produtosFiltrados = !temBusca
-              ? produtosRaw
-              : produtosRaw.where((doc) {
-                  final alvo = _alvoProduto(doc);
-                  if (palavrasBusca.length == 1) {
-                    // único termo: aceita parcial
-                    return alvo.contains(palavrasBusca.first);
-                  } else {
-                    final anteriores = palavrasBusca.sublist(
-                      0,
-                      palavrasBusca.length - 1,
-                    );
-                    final ultimo = palavrasBusca.last;
-                    final okAnteriores = anteriores.every(
-                      (p) => alvo.contains(p),
-                    );
-                    final okUltimo = alvo.contains(ultimo); // parcial do último
-                    return okAnteriores && okUltimo;
-                  }
-                }).toList();
-
-          if (produtosFiltrados.isEmpty) {
-            return const Center(child: Text('Nenhum produto encontrado.'));
-          }
-
-          return ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: produtosFiltrados.length,
-            itemBuilder: (context, index) {
-              final produto = produtosFiltrados[index];
-
-              final data = produto.data() as Map<String, dynamic>;
-
-              final Map<String, dynamic>? tamanhos =
-                  data['tamanhos'] as Map<String, dynamic>?;
-              final Map<String, dynamic>? tamanhosCores =
-                  data['tamanhosCores'] as Map<String, dynamic>?;
-
-              bool estoqueBaixo = false;
-              if (tamanhosCores != null && tamanhosCores.isNotEmpty) {
-                // baixo se qualquer variante <= 2
-                estoqueBaixo = tamanhosCores.values.any((cores) {
-                  if (cores is Map) {
-                    return cores.values.any(
-                      (q) => (q is num) && q.toInt() <= 2,
-                    );
-                  }
-                  return false;
-                });
-              } else if (tamanhos != null && tamanhos.isNotEmpty) {
-                estoqueBaixo = tamanhos.values.any(
-                  (qtd) => qtd is num && qtd.toInt() <= 0,
-                );
-              } else {
-                final quantidade = (data['quantidade'] ?? 0) as num;
-                estoqueBaixo = quantidade.toInt() <= 1;
-              }
-
-              return Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                margin: const EdgeInsets.symmetric(vertical: 6),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
+  Widget _cartao(_Produto produto) {
+    return _superficie(
+      Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _foto(produto.foto),
+                const SizedBox(width: 12),
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          data['foto'] != null
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.network(
-                                    data['foto'],
-                                    width: 60,
-                                    height: 60,
-                                    fit: BoxFit.cover,
-                                  ),
-                                )
-                              : const Icon(Icons.image, size: 60),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  data['nome'] ?? 'Sem nome',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    color: estoqueBaixo
-                                        ? Colors.red
-                                        : Colors.black,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'ID: ${data['codigoBarras'] ?? produto.id}',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                Text(
-                                  'Categoria: ${data['categoria'] ?? '-'}',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                Text(
-                                  'Loja: ${data['loja'] ?? '-'}',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                      Text(
+                        produto.nome,
+                        style: const TextStyle(
+                          color: _texto,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                      const Divider(),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          if (tipoUsuario == 'admin')
-                            Text(
-                              'Valor Real: R\$ ${data['valorReal']?.toStringAsFixed(2) ?? '-'}',
-                            ),
-                          Text(
-                            'Preço Venda: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
-                          ),
-                          Text(
-                            'Quantidade total: ${data['quantidade'] ?? 0}',
-                            style: TextStyle(
-                              color: estoqueBaixo ? Colors.red : Colors.black,
-                            ),
-                          ),
-
-                          if (tamanhosCores != null &&
-                              tamanhosCores.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: tamanhosCores.entries.expand<Widget>((
-                                tamEntry,
-                              ) {
-                                final tam = tamEntry.key;
-                                final cores = (tamEntry.value as Map)
-                                    .cast<String, dynamic>();
-                                return cores.entries.map((corEntry) {
-                                  final cor = corEntry.key;
-                                  final qtd = (corEntry.value is num)
-                                      ? (corEntry.value as num).toInt()
-                                      : 0;
-                                  return Chip(
-                                    label: Text('$tam • $cor: $qtd'),
-                                    backgroundColor: qtd <= 2
-                                        ? Colors.red.shade50
-                                        : Colors.grey.shade200,
-                                    labelStyle: TextStyle(
-                                      color: qtd <= 2
-                                          ? Colors.red
-                                          : Colors.black87,
-                                      fontSize: 12,
-                                    ),
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 0,
-                                    ),
-                                  );
-                                });
-                              }).toList(),
-                            ),
-                          ] else if (tamanhos != null &&
-                              tamanhos.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: tamanhos.entries.map((e) {
-                                final qtd = (e.value is num)
-                                    ? (e.value as num).toInt()
-                                    : 0;
-                                return Chip(
-                                  label: Text('${e.key}: $qtd'),
-                                  backgroundColor: qtd <= 2
-                                      ? Colors.red.shade50
-                                      : Colors.grey.shade200,
-                                  labelStyle: TextStyle(
-                                    color: qtd <= 2
-                                        ? Colors.red
-                                        : Colors.black87,
-                                    fontSize: 12,
-                                  ),
-                                  materialTapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 0,
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          ],
-                        ],
+                      const SizedBox(height: 4),
+                      Text(
+                        produto.categoria,
+                        style: const TextStyle(color: _suave),
                       ),
-
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: primaryColor,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            icon: const Icon(Icons.edit),
-                            label: const Text('Editar'),
-                            onPressed: () => _editarProduto(context, produto),
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.redAccent,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            icon: const Icon(Icons.delete),
-                            label: const Text('Excluir'),
-                            onPressed: () => _excluirProduto(
-                              context,
-                              produto.id,
-                              data['nome'],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: accentColor,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            icon: const Icon(Icons.print),
-                            label: const Text('Etiqueta'),
-                            onPressed: () =>
-                                _mostrarEtiquetaDialog(context, produto),
-                          ),
-                        ],
+                      const SizedBox(height: 2),
+                      Text(
+                        'Código: ${produto.codigo.isEmpty ? produto.id : produto.codigo}',
+                        style: const TextStyle(color: _suave, fontSize: 12),
                       ),
                     ],
                   ),
                 ),
-              );
-            },
-          );
-        },
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _tag('Venda ${_preco(produto.preco)}'),
+                if (_tipoUsuario == 'admin')
+                  _tag('Custo ${_preco(produto.custo)}'),
+                _tag(
+                  '${produto.estoqueBaixo ? 'Estoque baixo' : 'Estoque'} · '
+                  '${_numero.format(produto.quantidade)}',
+                  aviso: produto.estoqueBaixo,
+                  icone: produto.estoqueBaixo ? Icons.warning_amber : null,
+                ),
+              ],
+            ),
+            if (produto.grade.isNotEmpty || produto.tamanhos.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              ExpansionTile(
+                key: PageStorageKey('grade-${produto.id}'),
+                title: const Text('Tamanhos e estoque'),
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 10),
+                expandedAlignment: Alignment.centerLeft,
+                children: [_variantes(produto)],
+              ),
+            ],
+            const Divider(color: _borda, height: 22),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 4,
+              runSpacing: 2,
+              children: [
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: _marca),
+                  onPressed: () => _abrirCadastro(produto),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Editar'),
+                ),
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: _marca),
+                  onPressed: _imprimindo.contains(produto.id)
+                      ? null
+                      : () => _mostrarEtiqueta(produto),
+                  icon: const Icon(Icons.print_outlined, size: 18),
+                  label: const Text('Etiqueta'),
+                ),
+                IconButton(
+                  tooltip: 'Excluir produto',
+                  onPressed: _excluindo.contains(produto.id)
+                      ? null
+                      : () => _excluirProduto(produto),
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: _erro,
+                    size: 20,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _variantes(_Produto produto) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        if (produto.grade.isNotEmpty)
+          for (final tamanho in produto.grade.entries)
+            for (final cor in tamanho.value.entries)
+              _tag(
+                '${tamanho.key} · ${cor.key}: ${cor.value}',
+                aviso: cor.value <= 2,
+              )
+        else
+          for (final tamanho in produto.tamanhos.entries)
+            _tag('${tamanho.key}: ${tamanho.value}', aviso: tamanho.value <= 2),
+      ],
+    );
+  }
+
+  Widget _foto(String endereco) {
+    const placeholder = ColoredBox(
+      color: _rosaClaro,
+      child: Center(child: Icon(Icons.checkroom, color: _marca)),
+    );
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox.square(
+        dimension: 64,
+        child: endereco.isEmpty
+            ? placeholder
+            : Image.network(
+                endereco,
+                fit: BoxFit.cover,
+                webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
+                cacheWidth: kIsWeb
+                    ? null
+                    : (64 * MediaQuery.of(context).devicePixelRatio).ceil(),
+                errorBuilder: (context, erro, pilha) => const Tooltip(
+                  message: 'Não foi possível carregar a foto salva',
+                  child: ColoredBox(
+                    color: _rosaClaro,
+                    child: Center(
+                      child: Icon(Icons.broken_image_outlined, color: _marca),
+                    ),
+                  ),
+                ),
+              ),
       ),
     );
   }
 }
 
-Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
-  return ListTile(
-    leading: Icon(icon, color: Colors.white),
-    title: Text(title, style: const TextStyle(color: Colors.white)),
-    onTap: onTap,
+Widget _superficie(Widget filho) {
+  return Material(
+    color: Colors.white,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+      side: const BorderSide(color: _borda),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: filho,
+  );
+}
+
+Widget _tag(String texto, {bool aviso = false, IconData? icone}) {
+  final cor = aviso ? _aviso : _marca;
+  return DecoratedBox(
+    decoration: BoxDecoration(
+      color: aviso ? _avisoClaro : _rosaClaro,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icone != null) ...[
+            Icon(icone, color: cor, size: 14),
+            const SizedBox(width: 4),
+          ],
+          Flexible(
+            child: Text(
+              texto,
+              style: TextStyle(
+                color: cor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _Catalogo {
+  _Catalogo(this.produtos)
+    : estoqueBaixo = produtos.where((produto) => produto.estoqueBaixo).length;
+
+  final List<_Produto> produtos;
+  final int estoqueBaixo;
+  String? _ultimaBusca;
+  List<_Produto> _resultado = const [];
+
+  List<_Produto> filtrar(String busca) {
+    if (busca.isEmpty) return produtos;
+    if (_ultimaBusca == busca) return _resultado;
+
+    final termos = busca.split(' ');
+    _resultado = produtos
+        .where((produto) => termos.every(produto.textoBusca.contains))
+        .toList();
+    _ultimaBusca = busca;
+    return _resultado;
+  }
+}
+
+class _Produto {
+  factory _Produto(QueryDocumentSnapshot<Map<String, dynamic>> documento) {
+    final dados = documento.data();
+    final tamanhos = _quantidades(dados['tamanhos']);
+    final grade = <String, Map<String, int>>{};
+    final dadosGrade = dados['tamanhosCores'];
+    if (dadosGrade is Map) {
+      for (final tamanho in dadosGrade.entries) {
+        final cores = _quantidades(tamanho.value);
+        if (cores.isNotEmpty) grade[tamanho.key.toString()] = cores;
+      }
+    }
+
+    final nome = _campo(dados['nome'], 'Produto sem nome');
+    final categoria = _campo(dados['categoria'], 'Sem categoria');
+    final codigo = _campo(dados['codigoBarras']);
+    final quantidade = _valor(dados['quantidade'])?.toInt() ?? 0;
+    final estoqueBaixo = grade.isNotEmpty
+        ? grade.values.any((cores) => cores.values.any((qtd) => qtd <= 2))
+        : tamanhos.isNotEmpty
+        ? tamanhos.values.any((qtd) => qtd <= 0)
+        : quantidade <= 1;
+
+    return _Produto._(
+      documento: documento,
+      nome: nome,
+      categoria: categoria,
+      codigo: codigo,
+      foto: _campo(dados['foto']),
+      preco: _valor(dados['precoVenda']),
+      custo: _valor(dados['valorReal']),
+      quantidade: quantidade,
+      tamanhos: tamanhos,
+      grade: grade,
+      estoqueBaixo: estoqueBaixo,
+      textoBusca: _normalizar(
+        [
+          nome,
+          codigo,
+          documento.id,
+          categoria,
+          dados['descricao'],
+          dados['cor'],
+          dados['loja'],
+          ...tamanhos.keys,
+          for (final tamanho in grade.entries) ...[
+            tamanho.key,
+            ...tamanho.value.keys,
+          ],
+        ].whereType<Object>().join(' '),
+      ),
+    );
+  }
+
+  const _Produto._({
+    required this.documento,
+    required this.nome,
+    required this.categoria,
+    required this.codigo,
+    required this.foto,
+    required this.preco,
+    required this.custo,
+    required this.quantidade,
+    required this.tamanhos,
+    required this.grade,
+    required this.estoqueBaixo,
+    required this.textoBusca,
+  });
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> documento;
+  final String nome;
+  final String categoria;
+  final String codigo;
+  final String foto;
+  final num? preco;
+  final num? custo;
+  final int quantidade;
+  final Map<String, int> tamanhos;
+  final Map<String, Map<String, int>> grade;
+  final bool estoqueBaixo;
+  final String textoBusca;
+
+  String get id => documento.id;
+}
+
+Map<String, int> _quantidades(Object? dados) {
+  if (dados is! Map) return const {};
+  return {
+    for (final entrada in dados.entries)
+      entrada.key.toString(): _valor(entrada.value)?.toInt() ?? 0,
+  };
+}
+
+String _campo(Object? valor, [String padrao = '']) {
+  final texto = valor?.toString().trim() ?? '';
+  return texto.isEmpty ? padrao : texto;
+}
+
+num? _valor(Object? valor) {
+  if (valor is num) return valor.isFinite ? valor : null;
+  final texto = _campo(valor).replaceAll('R\$', '').trim();
+  final numero = num.tryParse(
+    texto.contains(',')
+        ? texto.replaceAll('.', '').replaceAll(',', '.')
+        : texto,
+  );
+  return numero != null && numero.isFinite ? numero : null;
+}
+
+String _preco(num? valor) => valor == null ? '—' : _moeda.format(valor);
+
+final _espacos = RegExp(r'\s+');
+
+String _normalizar(String texto) {
+  const acentos = 'áàâãäéèêëíìîïóòôõöúùûüçñ';
+  const letras = 'aaaaaeeeeiiiiooooouuuucn';
+  var resultado = texto.toLowerCase().trim();
+  for (var i = 0; i < acentos.length; i++) {
+    resultado = resultado.replaceAll(acentos[i], letras[i]);
+  }
+  return resultado.replaceAll(_espacos, ' ');
+}
+
+class _PedidoEtiqueta {
+  const _PedidoEtiqueta(this.impressora, this.tamanho, this.cor);
+
+  final Printer impressora;
+  final String? tamanho;
+  final String? cor;
+}
+
+class _DialogoEtiqueta extends StatefulWidget {
+  const _DialogoEtiqueta({required this.produto});
+
+  final _Produto produto;
+
+  @override
+  State<_DialogoEtiqueta> createState() => _DialogoEtiquetaState();
+}
+
+class _DialogoEtiquetaState extends State<_DialogoEtiqueta> {
+  late Future<List<Printer>> _impressoras;
+  Printer? _impressora;
+  String? _tamanho;
+  String? _cor;
+
+  @override
+  void initState() {
+    super.initState();
+    _impressoras = _listarImpressoras();
+  }
+
+  Future<List<Printer>> _listarImpressoras() async {
+    final impressoras = await Printing.listPrinters();
+    if (impressoras.isNotEmpty) {
+      _impressora = impressoras.firstWhere(
+        (item) => item.name == 'ELGIN L42PRO ETIQUETA',
+        orElse: () => impressoras.first,
+      );
+    }
+    return impressoras;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Printer>>(
+      future: _impressoras,
+      builder: (context, snapshot) {
+        final impressoras = snapshot.data ?? const <Printer>[];
+        final pronto =
+            snapshot.connectionState == ConnectionState.done &&
+            !snapshot.hasError &&
+            impressoras.isNotEmpty;
+        final grade = widget.produto.grade;
+        final tamanhos = grade.isNotEmpty
+            ? grade.keys
+            : widget.produto.tamanhos.keys;
+        final cores = grade[_tamanho]?.keys ?? const <String>[];
+        final podeImprimir =
+            pronto &&
+            _impressora != null &&
+            (tamanhos.isEmpty || _tamanho != null) &&
+            (grade.isEmpty || _cor != null);
+
+        return AlertDialog(
+          title: const Text('Imprimir etiqueta'),
+          scrollable: true,
+          content: SizedBox(
+            width: 360,
+            child: !pronto
+                ? _estadoImpressoras(snapshot)
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        widget.produto.nome,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(_preco(widget.produto.preco)),
+                      const SizedBox(height: 12),
+                      if (tamanhos.isNotEmpty) ...[
+                        _seletor<String>(
+                          'Tamanho',
+                          _tamanho,
+                          tamanhos,
+                          (valor) => setState(() {
+                            _tamanho = valor;
+                            _cor = null;
+                          }),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      if (grade.isNotEmpty) ...[
+                        _seletor<String>(
+                          'Cor',
+                          _cor,
+                          cores,
+                          cores.isEmpty
+                              ? null
+                              : (valor) => setState(() => _cor = valor),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      _seletor<Printer>(
+                        'Impressora',
+                        _impressora,
+                        impressoras,
+                        (valor) => setState(() => _impressora = valor),
+                        legenda: (item) => item.name,
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        height: 60,
+                        child: BarcodeWidget(
+                          barcode: Barcode.code128(),
+                          data: widget.produto.codigo,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _marca),
+              onPressed: !podeImprimir
+                  ? null
+                  : () => Navigator.of(
+                      context,
+                    ).pop(_PedidoEtiqueta(_impressora!, _tamanho, _cor)),
+              child: const Text('Imprimir'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _estadoImpressoras(AsyncSnapshot<List<Printer>> snapshot) {
+    if (snapshot.connectionState != ConnectionState.done) {
+      return const SizedBox(
+        height: 100,
+        child: Center(child: CircularProgressIndicator(color: _marca)),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          snapshot.hasError
+              ? 'Não foi possível consultar as impressoras.'
+              : 'Nenhuma impressora encontrada.',
+        ),
+        TextButton(
+          onPressed: () => setState(() {
+            _impressora = null;
+            _impressoras = _listarImpressoras();
+          }),
+          child: const Text('Tentar novamente'),
+        ),
+      ],
+    );
+  }
+
+  Widget _seletor<T>(
+    String rotulo,
+    T? selecionado,
+    Iterable<T> valores,
+    ValueChanged<T?>? aoAlterar, {
+    String Function(T)? legenda,
+  }) {
+    return InputDecorator(
+      isEmpty: selecionado == null,
+      decoration: InputDecoration(
+        labelText: rotulo,
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: selecionado,
+          isDense: true,
+          isExpanded: true,
+          hint: const Text('Selecionar'),
+          items: [
+            for (final valor in valores)
+              DropdownMenuItem<T>(
+                value: valor,
+                child: Text(
+                  legenda?.call(valor) ?? valor.toString(),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: aoAlterar,
+        ),
+      ),
+    );
+  }
+}
+
+Future<bool> _imprimirEtiquetaDupla(
+  _Produto produto,
+  _PedidoEtiqueta pedido,
+) async {
+  final documento = pw.Document();
+  const largura = 36 * PdfPageFormat.mm;
+  const altura = 25 * PdfPageFormat.mm;
+  final nome = produto.nome.length > 20
+      ? '${produto.nome.substring(0, 20)}…'
+      : produto.nome;
+  final variante = [
+    if (pedido.tamanho != null) 'Tam: ${pedido.tamanho}',
+    if (pedido.cor != null) pedido.cor!,
+  ].join(' / ');
+
+  pw.Widget etiqueta() {
+    return pw.Container(
+      width: largura,
+      height: altura,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+        crossAxisAlignment: pw.CrossAxisAlignment.center,
+        children: [
+          pw.Text(
+            nome,
+            style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+            maxLines: 1,
+            textAlign: pw.TextAlign.center,
+          ),
+          if (variante.isNotEmpty)
+            pw.Text(
+              variante,
+              style: const pw.TextStyle(fontSize: 6),
+              maxLines: 1,
+              textAlign: pw.TextAlign.center,
+            ),
+          pw.Text(
+            'R\$ ${produto.preco?.toStringAsFixed(2) ?? '-'}',
+            style: const pw.TextStyle(fontSize: 6),
+          ),
+          pw.BarcodeWidget(
+            barcode: Barcode.code128(),
+            data: produto.codigo,
+            width: 100,
+            height: 30,
+            drawText: false,
+          ),
+          pw.Text(produto.codigo, style: const pw.TextStyle(fontSize: 6)),
+        ],
+      ),
+    );
+  }
+
+  documento.addPage(
+    pw.Page(
+      pageFormat: PdfPageFormat(90 * PdfPageFormat.mm, altura),
+      margin: const pw.EdgeInsets.symmetric(horizontal: 4 * PdfPageFormat.mm),
+      build: (_) => pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [etiqueta(), pw.SizedBox(width: 10), etiqueta()],
+      ),
+    ),
+  );
+
+  return await Printing.directPrintPdf(
+    printer: pedido.impressora,
+    onLayout: (_) => documento.save(),
   );
 }

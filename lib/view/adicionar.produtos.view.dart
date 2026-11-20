@@ -1,10 +1,23 @@
+import 'dart:async';
+import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:barcode_widget/barcode_widget.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'dart:io';
+import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_multi_formatter/flutter_multi_formatter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:senhorita/view/clientes.view.dart';
 import 'package:senhorita/view/configuracoes.view.dart';
 import 'package:senhorita/view/home.view.dart';
@@ -13,11 +26,7 @@ import 'package:senhorita/view/produtos.view.dart';
 import 'package:senhorita/view/relatorios.view.dart';
 import 'package:senhorita/view/vendas.realizadas.view.dart';
 import 'package:senhorita/view/vendas.view.dart';
-import 'dart:math';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
-import 'package:barcode_widget/barcode_widget.dart';
+import 'package:uuid/uuid.dart';
 
 class AdicionarProdutosView extends StatefulWidget {
   final String lojaSelecionada;
@@ -32,42 +41,63 @@ class AdicionarProdutosView extends StatefulWidget {
   State<AdicionarProdutosView> createState() => _AdicionarProdutoPageState();
 }
 
+const _fundo = Color(0xFFFAF7F9);
+const _texto = Color(0xFF301F2C);
+const _suave = Color(0xFF695763);
+const _marca = Color(0xFF832958);
+const _rosaClaro = Color(0xFFF8EAF2);
+const _borda = Color(0xFFEADDE5);
+
+final _moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+final _numero = NumberFormat.decimalPattern('pt_BR');
+
 class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
-  final _formKey = GlobalKey<FormState>();
-  final nomeController = TextEditingController();
-  final descricaoController = TextEditingController();
-  final valorRealController = TextEditingController();
-  final precoVendaController = TextEditingController();
-  final quantidadeController = TextEditingController();
-  final codigoBarrasController = TextEditingController();
-  File? imagemSelecionada;
-  String? urlImagem;
-  String? corSelecionada;
-  String tipoUsuario = '';
-  final user = FirebaseAuth.instance.currentUser;
-  final Color primaryColor = const Color.fromARGB(255, 194, 131, 178);
-  final Color accentColor = const Color(0xFFec407a);
-  String nomeUsuario = '';
-  String? lojaSelecionada;
-  List<String> lojas = [
-    'Senhorita Modeladores (Matriz)',
-    'Senhorita Jalecos (Filial)',
-  ]; // Coloque aqui os nomes das lojas disponíveis
+  final _db = FirebaseFirestore.instance;
+  final _formulario = GlobalKey<FormState>();
+  final _rolagem = ScrollController();
+  final _nome = TextEditingController();
+  final _descricao = TextEditingController();
+  final _custo = TextEditingController();
+  final _precoVenda = TextEditingController();
+  final _quantidade = TextEditingController();
+  final _picker = ImagePicker();
+  final _grade = <String, Map<String, int>>{};
+  final _proporcoes = <String, Map<String, int>>{};
+  final _totaisPorTamanho = <String, TextEditingController>{};
 
-  Future<void> buscarTipoUsuario() async {
-    if (user != null) {
-      final doc = await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(user!.uid)
-          .get();
-      setState(() {
-        tipoUsuario = doc['tipo'] ?? 'funcionario';
-        nomeUsuario = doc['nome'] ?? 'Usuário';
-      });
-    }
-  }
+  String _tipoUsuario = '';
+  String _nomeUsuario = '';
+  String? _categoria;
+  String _corOriginal = '';
+  String _codigo = '';
+  String _fotoAtual = '';
+  Uint8List? _fotoSelecionada;
+  String? _nomeNovaFoto;
+  String? _tipoNovaFoto;
+  bool _removerFoto = false;
+  String? _urlFotoEnviada;
+  Map<String, dynamic> _original = const {};
+  late bool _usavaQuantidadeSimples;
+  bool _estoqueAlterado = false;
+  bool _selecionandoFoto = false;
+  bool _salvando = false;
+  bool _enviandoFoto = false;
+  bool _saindo = false;
+  DocumentReference<Map<String, dynamic>>? _novoDocumento;
 
-  final coresDisponiveis = {
+  String get _loja => widget.lojaSelecionada.trim();
+  bool get _editando => widget.produto != null;
+  bool get _semGrade => categoriasSemTamanho.contains(_categoria);
+  bool get _ocupado => _salvando || _selecionandoFoto || _saindo;
+  bool get _temFoto =>
+      _fotoSelecionada != null || (!_removerFoto && _fotoAtual.isNotEmpty);
+
+  bool get _podeAbrirCamera =>
+      kIsWeb ||
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+
+  static const coresDisponiveis = {
     'PRETO': Colors.black,
     'BRANCO': Colors.white,
     'VERMELHO': Colors.red,
@@ -79,13 +109,13 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'CINZA': Colors.grey,
     'LARANJA': Colors.orange,
     'MARROM': Colors.brown,
-    'CASTANHA': const Color.fromARGB(255, 83, 46, 16),
-    'BEGE': const Color(0xFFF5F5DC),
-    'ESTAMPA': const Color(0xFFD8BFD8),
-    'CORES VARIADAS': const Color.fromARGB(255, 102, 201, 132),
+    'CASTANHA': Color.fromARGB(255, 83, 46, 16),
+    'BEGE': Color(0xFFF5F5DC),
+    'ESTAMPA': Color(0xFFD8BFD8),
+    'CORES VARIADAS': Color.fromARGB(255, 102, 201, 132),
   };
 
-  final categorias = [
+  static const categorias = [
     'CINTA',
     'MODELADORES',
     'PÓS-CIRÚRGICO',
@@ -100,15 +130,14 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     'OUTROS',
   ];
 
-  final categoriasSemTamanho = [
+  static const categoriasSemTamanho = [
     'ACESSÓRIOS',
     'CHEIRO PARA AMBIENTE',
     'BOLSAS',
     'OUTROS',
   ];
 
-  String? categoriaSelecionada;
-  final tamanhosDisponiveis = [
+  static const tamanhosDisponiveis = [
     'EPP',
     'PP',
     'P',
@@ -121,1509 +150,1878 @@ class _AdicionarProdutoPageState extends State<AdicionarProdutosView> {
     '54',
   ];
 
-  // no _SeuState:
-  final Map<String, TextEditingController> _qtdCtrlPorTam = {};
-
-  void _sincronizarQtdTotalComCores(String tam) {
-    final mapCores = tamanhosCoresSelecionados[tam] ?? <String, int>{};
-    final total = mapCores.values.fold<int>(0, (a, v) => a + (v < 0 ? 0 : v));
-    // garante controller e atualiza texto
-    final ctrl = _qtdCtrlPorTam.putIfAbsent(tam, () => TextEditingController());
-    // evita loop de setState desnecessário
-    if (ctrl.text != total.toString()) {
-      ctrl.text = total.toString();
-    }
-  }
-
-  // Grade Tamanho × Cor (inicialização preguiçosa)
-  Map<String, Map<String, int>> tamanhosCoresSelecionados = {};
-
-  // Helpers para grade
-  int _calcularTotalGrade(Map<String, Map<String, int>> grade) {
-    var total = 0;
-    for (final cores in grade.values) {
-      for (final q in cores.values) {
-        total += (q);
-      }
-    }
-    return total;
-  }
-
-  Map<String, Map<String, int>> _compactarGrade(
-    Map<String, Map<String, int>> grade,
-  ) {
-    final saida = <String, Map<String, int>>{};
-    grade.forEach((tam, cores) {
-      final filtradas = <String, int>{};
-      cores.forEach((cor, q) {
-        if ((q) > 0) filtradas[cor] = q;
-      });
-      if (filtradas.isNotEmpty) saida[tam] = filtradas;
-    });
-    return saida;
-  }
-
   @override
   void initState() {
     super.initState();
-    buscarTipoUsuario();
-    if (widget.produto != null) {
-      final data = widget.produto!.data() as Map<String, dynamic>;
-      nomeController.text = data['nome'] ?? '';
-      descricaoController.text = data['descricao'] ?? '';
-      corSelecionada = data['cor'];
-      valorRealController.text = (data['valorReal'] != null)
-          ? 'R\$ ${(data['valorReal'] as num).toStringAsFixed(2).replaceAll('.', ',')}'
-          : '';
+    final dados = widget.produto?.data();
+    if (dados is Map<String, dynamic>) {
+      _original = dados;
+      _nome.text = _campo(dados['nome']).toUpperCase();
+      _descricao.text = _campo(dados['descricao']);
+      _categoria = _campo(dados['categoria']);
+      if (_categoria!.isEmpty) _categoria = null;
+      _corOriginal = _campo(dados['cor']);
+      _codigo = _campo(dados['codigoBarras']);
+      _fotoAtual = _campo(dados['foto']);
+      if (dados['quantidade'] != null) {
+        _quantidade.text = _lerQuantidade(dados['quantidade']).toString();
+      }
+      _custo.text = _precoParaCampo(dados['valorReal']);
+      _precoVenda.text = _precoParaCampo(dados['precoVenda']);
 
-      precoVendaController.text = (data['precoVenda'] != null)
-          ? 'R\$ ${(data['precoVenda'] as num).toStringAsFixed(2).replaceAll('.', ',')}'
-          : '';
-      quantidadeController.text = data['quantidade']?.toString() ?? '';
-      urlImagem = data['foto'];
-      categoriaSelecionada = data['categoria'];
-      codigoBarrasController.text = data['codigoBarras'] ?? '';
-
-      // 1) Tenta ler o novo formato: tamanhosCores
-      final Map<String, dynamic>? tcDbRaw =
-          data['tamanhosCores'] as Map<String, dynamic>?;
-      if (tcDbRaw != null) {
-        // Converte p/ Map<String, Map<String,int>>
-        tcDbRaw.forEach((tam, coresRaw) {
-          final coresMap = <String, int>{};
-          if (coresRaw is Map) {
-            coresRaw.forEach((cor, q) {
-              final qtd = (q is num)
-                  ? q.toInt()
-                  : int.tryParse(q.toString()) ?? 0;
-              if (qtd > 0) coresMap[cor.toString()] = qtd;
-            });
-          }
-          if (coresMap.isNotEmpty) {
-            tamanhosCoresSelecionados[tam.toString()] = coresMap;
-          }
-        });
-      } else {
-        // 2) Retrocompat: se existir apenas 'tamanhos', migra p/ uma cor base
-        final Map<String, dynamic>? tamanhosAntigos =
-            data['tamanhos'] as Map<String, dynamic>?;
-        if (tamanhosAntigos != null) {
-          final corBase =
-              (data['cor'] as String?)?.toUpperCase() ?? 'CORES VARIADAS';
-          tamanhosAntigos.forEach((tam, q) {
-            final qtd = (q is num)
-                ? q.toInt()
-                : int.tryParse(q.toString()) ?? 0;
-            if (qtd > 0) {
-              final m = (tamanhosCoresSelecionados[tam] ??= <String, int>{});
-              m[corBase] = qtd;
-            }
-          });
+      final coresPorTamanho = dados['tamanhosCores'];
+      if (coresPorTamanho is Map) {
+        for (final item in coresPorTamanho.entries) {
+          final cores = _lerQuantidades(item.value);
+          if (cores.isNotEmpty) _grade[item.key.toString()] = cores;
+        }
+      }
+      // Os cadastros antigos podem ter somente quantidades por tamanho.
+      if (_grade.isEmpty) {
+        final corBase = _corOriginal.isEmpty
+            ? 'CORES VARIADAS'
+            : _corOriginal.toUpperCase();
+        for (final item in _lerQuantidades(dados['tamanhos']).entries) {
+          _grade[item.key] = {corBase: item.value};
         }
       }
     }
-  }
-
-  Future<void> selecionarImagem({required ImageSource source}) async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: source);
-    if (pickedFile != null) {
-      setState(() => imagemSelecionada = File(pickedFile.path));
+    _usavaQuantidadeSimples = _semGrade;
+    _proporcoes.addAll(_grade);
+    for (final tamanho in _tamanhos) {
+      _totaisPorTamanho[tamanho] = TextEditingController(
+        text: _somar(_grade[tamanho]).toString(),
+      );
     }
+    _carregarPerfil();
   }
 
-  double _converterParaDouble(String valor) {
-    final somenteNumeros = valor.replaceAll(RegExp(r'[^0-9]'), '');
-    final convertido = double.tryParse(somenteNumeros);
-    if (convertido == null) return 0.0;
-    return convertido / 100;
+  @override
+  void dispose() {
+    _rolagem.dispose();
+    for (final controller in <TextEditingController>[
+      _nome,
+      _descricao,
+      _custo,
+      _precoVenda,
+      _quantidade,
+      ..._totaisPorTamanho.values,
+    ]) {
+      controller.dispose();
+    }
+    super.dispose();
   }
 
-  Future<String?> uploadImagem(String id) async {
-    if (imagemSelecionada == null) return urlImagem;
+  Future<void> _carregarPerfil() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
     try {
-      final ref = FirebaseStorage.instance.ref().child('produtos/$id.jpg');
-      await ref.putFile(imagemSelecionada!);
-      return await ref.getDownloadURL();
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erro ao enviar imagem: $e')));
-      return null;
+      final perfil = (await _db.collection('usuarios').doc(uid).get()).data();
+      if (!mounted) return;
+      setState(() {
+        _tipoUsuario = _campo(perfil?['tipo'], 'funcionario');
+        _nomeUsuario = _campo(perfil?['nome'], 'Usuário');
+      });
+    } catch (erro) {
+      debugPrint('Cadastro • perfil: $erro');
+      if (mounted) _mensagem('Não foi possível carregar o perfil do usuário.');
     }
   }
 
-  /// Gera um código aleatório com prefixo, exemplo: 'PROD9K2X3A'
-  String gerarCodigoComPrefixo(String prefixo, {int tamanho = 6}) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final rand = Random.secure();
+  List<String> get _tamanhos =>
+      {...tamanhosDisponiveis, ..._grade.keys}.toList();
 
-    final sufixo = List.generate(
-      tamanho,
-      (_) => chars[rand.nextInt(chars.length)],
-    ).join();
-
-    return '$prefixo$sufixo'; // Ou só return sufixo;
+  void _mensagem(String aviso) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(aviso)));
   }
 
-  /// Verifica se o código já existe no Firestore
-  Future<bool> codigoJaExiste(String codigo) async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection('produtos')
-        .where('codigoBarras', isEqualTo: codigo)
-        .get();
-
-    return snapshot.docs.isNotEmpty;
-  }
-
-  /// Gera um código único que ainda não existe no Firebase
-  Future<String> gerarCodigoUnico({String prefixo = 'PROD'}) async {
-    String codigo;
-    bool existe;
-
-    do {
-      codigo = gerarCodigoComPrefixo(prefixo);
-      existe = await codigoJaExiste(codigo);
-    } while (existe);
-
-    return codigo;
-  }
-
-  Future<void> salvarProduto() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-
-    final bool novoProduto = widget.produto == null;
-
-    final docRef = novoProduto
-        ? FirebaseFirestore.instance.collection('produtos').doc()
-        : FirebaseFirestore.instance
-              .collection('produtos')
-              .doc(widget.produto!.id);
-
-    String codigoCurto;
-
-    if (novoProduto) {
-      codigoCurto = await gerarCodigoUnico(prefixo: 'PROD');
-    } else {
-      final dados = widget.produto!.data() as Map<String, dynamic>;
-      codigoCurto =
-          (dados['codigoBarras'] as String?) ??
-          await gerarCodigoUnico(prefixo: 'PROD');
+  Future<void> _selecionarFoto(ImageSource origem) async {
+    if (_ocupado) return;
+    final pelaCamera = origem == ImageSource.camera;
+    if (pelaCamera && !_podeAbrirCamera) {
+      _mensagem('No computador, use a Galeria para adicionar uma foto.');
+      return;
     }
 
+    setState(() => _selecionandoFoto = true);
     try {
-      // ========== Upload da imagem (tolerante a ausência de imagem) ==========
-      String? fotoUrl;
-      try {
-        fotoUrl = await uploadImagem(
-          docRef.id,
-        ); // garanta que esta função retorna null se não houver imagem
-      } catch (_) {
-        // se falhar o upload, seguimos sem imagem
-        fotoUrl = null;
-      }
-
-      final bool semTamanho =
-          categoriaSelecionada != null &&
-          categoriasSemTamanho.contains(categoriaSelecionada!);
-
-      final gradeCompacta = _compactarGrade(tamanhosCoresSelecionados);
-
-      final int quantidadeTotal = semTamanho
-          ? int.tryParse(quantidadeController.text) ?? 0
-          : _calcularTotalGrade(gradeCompacta);
-
-      final nome = nomeController.text.trim().toUpperCase();
-      final descricao = descricaoController.text.trim().toUpperCase();
-      final categoria = categoriaSelecionada ?? 'Não definido';
-
-      final loja = widget.lojaSelecionada.trim();
-      if (loja.isEmpty) {
-        if (context.mounted) Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Loja não definida. Faça login novamente.'),
-          ),
-        );
+      final arquivo = await _picker.pickImage(
+        source: origem,
+        preferredCameraDevice: CameraDevice.rear,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 85,
+        requestFullMetadata: false,
+      );
+      if (arquivo == null || !mounted) return;
+      final bytes = await arquivo.readAsBytes();
+      if (!mounted) return;
+      if (bytes.isEmpty) {
+        _mensagem('A foto selecionada está vazia.');
         return;
       }
-      // --------- Base do documento (sem campos que possam exigir delete) ---------
-      final Map<String, dynamic> base = {
-        'nome': nome,
-        'descricao': descricao,
-        'cor': corSelecionada ?? '',
-        'loja': loja,
-        'foto': fotoUrl ?? '',
-        if (tipoUsuario != 'funcionario')
-          'valorReal': _converterParaDouble(valorRealController.text),
-        'precoVenda': _converterParaDouble(precoVendaController.text),
-        'categoria': categoria,
-        'dataCadastro': FieldValue.serverTimestamp(),
-        'horaCadastro': FieldValue.serverTimestamp(),
-        'quantidade': quantidadeTotal,
-        'codigoBarras': codigoCurto,
-        'busca': [nome.toLowerCase(), codigoCurto.toLowerCase()],
-      };
 
-      // --------- Campos de grade quando houver tamanho/cor ---------
-      final Map<String, dynamic> camposGradeQuandoTem = {
-        // somatório por tamanho (retrocompat)
-        'tamanhos': {
-          for (final e in gradeCompacta.entries)
-            e.key: e.value.values.fold<int>(0, (a, b) => a + b),
-        },
-        // grade Tamanho × Cor
-        'tamanhosCores': gradeCompacta,
-      };
-
-      if (semTamanho) {
-        // PRODUTO SEM TAMANHO
-        if (novoProduto) {
-          // Em criação: não tente "deletar" campos; apenas NÃO os envie
-          await docRef.set(base);
-        } else {
-          // Em atualização: podemos apagar com merge ou update
-          // 1º: aplica base com merge (para não sobrescrever com nulls)
-          await docRef.set(base, SetOptions(merge: true));
-          // 2º: apaga os campos de grade corretamente
-          await docRef.update({
-            'tamanhos': FieldValue.delete(),
-            'tamanhosCores': FieldValue.delete(),
-          });
+      try {
+        final codec = await ui.instantiateImageCodec(
+          bytes,
+          targetWidth: 64,
+          allowUpscaling: false,
+        );
+        try {
+          final quadro = await codec.getNextFrame();
+          quadro.image.dispose();
+        } finally {
+          codec.dispose();
         }
-      } else {
-        // PRODUTO COM TAMANHO/COR
-        final payload = <String, dynamic>{...base, ...camposGradeQuandoTem};
-        // Tanto em criação quanto atualização, set simples funciona
-        await docRef.set(payload);
+      } catch (erro) {
+        debugPrint('Cadastro • formato da foto: $erro');
+        if (mounted) _mensagem('Não foi possível ler a imagem. Tente outra foto.');
+        return;
       }
+      if (!mounted) return;
 
-      // snapshot para etiqueta
-      final snap = await docRef.get();
-
-      if (!context.mounted) return;
-      Navigator.of(context).pop(); // fecha o loader
-
-      // Diálogo de sucesso + opção de imprimir etiqueta
-      await showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Text('Sucesso'),
-          content: const Text('O produto foi salvo com sucesso.'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context); // fecha este diálogo
-                _mostrarEtiquetaDialog(context, snap);
-              },
-              child: const Text('Imprimir etiqueta'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context); // fecha este diálogo
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        ProdutosView(lojaSelecionada: widget.lojaSelecionada),
-                  ),
-                );
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        ),
+      final extensao = RegExp(r'\.[a-z0-9]{2,5}$', caseSensitive: false)
+          .firstMatch(arquivo.name)
+          ?.group(0)
+          ?.toLowerCase();
+      final nome = '${const Uuid().v4()}${extensao ?? '.jpg'}';
+      setState(() {
+        _fotoSelecionada = bytes;
+        _nomeNovaFoto = nome;
+        _tipoNovaFoto = arquivo.mimeType;
+        _urlFotoEnviada = null;
+        _removerFoto = false;
+      });
+    } catch (erro) {
+      debugPrint('Cadastro • seleção de foto: $erro');
+      if (!mounted) return;
+      _mensagem(
+        pelaCamera
+            ? 'Não foi possível abrir a câmera. Confira a permissão do dispositivo ou use a Galeria.'
+            : 'Não foi possível abrir a Galeria. Confira a permissão e tente novamente.',
       );
-    } catch (e) {
-      if (context.mounted) {
-        Navigator.of(context).pop(); // fecha o loader
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Erro ao salvar produto: $e')));
+    } finally {
+      if (mounted) setState(() => _selecionandoFoto = false);
+    }
+  }
+
+  void _alterarRemocaoFoto({required bool remover}) {
+    setState(() {
+      _fotoSelecionada = null;
+      _nomeNovaFoto = null;
+      _tipoNovaFoto = null;
+      _urlFotoEnviada = null;
+      _removerFoto = remover && _fotoAtual.isNotEmpty;
+    });
+  }
+
+  Future<String> _enviarFoto(String id, String nome, Uint8List bytes) async {
+    final urlEnviada = _urlFotoEnviada;
+    if (urlEnviada != null) return urlEnviada;
+
+    final referencia =
+        FirebaseStorage.instance.ref().child('produtos/$id-$nome');
+    final tipo = _tipoNovaFoto;
+    final metadados = tipo == null ? null : SettableMetadata(contentType: tipo);
+    final tarefa = referencia.putData(bytes, metadados);
+    await tarefa.timeout(
+      const Duration(seconds: 45),
+      onTimeout: () {
+        unawaited(_cancelarEnvioFoto(tarefa));
+        throw TimeoutException('O envio da foto excedeu o tempo limite.');
+      },
+    );
+    final url = await referencia.getDownloadURL().timeout(
+      const Duration(seconds: 15),
+    );
+    _urlFotoEnviada = url;
+    return url;
+  }
+
+  Future<void> _cancelarEnvioFoto(UploadTask tarefa) async {
+    try {
+      await tarefa.cancel();
+    } catch (erro) {
+      debugPrint('Cadastro • cancelamento do envio da foto: $erro');
+    }
+  }
+
+  String _mensagemErroFoto(Object erro) {
+    if (erro is TimeoutException) {
+      return 'O envio da foto demorou demais. Verifique a conexão e tente salvar novamente.';
+    }
+    if (erro is FirebaseException) {
+      switch (erro.code) {
+        case 'unauthenticated':
+          return 'A sessão expirou ao enviar a foto.';
+        case 'unauthorized':
+          return 'Sua conta não tem permissão para enviar a foto no Firebase Storage.';
+        case 'bucket-not-found':
+        case 'no-default-bucket':
+        case 'quota-exceeded':
+          return 'O Firebase Storage está indisponível para enviar a foto (${erro.code}).';
+        default:
+          return 'Não foi possível enviar a foto (${erro.code}). Tente salvar novamente.';
       }
+    }
+    return 'Não foi possível enviar a foto. Confira o arquivo e tente salvar novamente.';
+  }
+
+  Future<String> _gerarCodigo() async {
+    const caracteres = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final aleatorio = Random.secure();
+    while (true) {
+      final sufixo = List.generate(
+        6,
+        (_) => caracteres[aleatorio.nextInt(caracteres.length)],
+      ).join();
+      final codigo = 'PROD$sufixo';
+      final encontrados = await _db
+          .collection('produtos')
+          .where('codigoBarras', isEqualTo: codigo)
+          .limit(1)
+          .get();
+      if (encontrados.docs.isEmpty) return codigo;
+    }
+  }
+
+  Future<void> _salvar() async {
+    if (_ocupado) return;
+    if (_loja.isEmpty) {
+      _mensagem('Selecione uma loja antes de salvar o produto.');
+      return;
+    }
+    final lojaOriginal = _campo(_original['loja']);
+    if (_editando && lojaOriginal.isNotEmpty && lojaOriginal != _loja) {
+      _mensagem('Abra o produto pela loja em que ele foi cadastrado.');
+      return;
+    }
+    if (!(_formulario.currentState?.validate() ?? false)) {
+      if (_rolagem.hasClients) {
+        _rolagem.animateTo(
+          0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() => _salvando = true);
+    final nome = _nome.text.trim().toUpperCase();
+    final preco = _lerMoedaDoCampo(_precoVenda.text);
+    final loja = _loja;
+    final categoria = _categoria!;
+    final semGrade = _semGrade;
+    final alterarEstoque =
+        !_editando || _estoqueAlterado || semGrade != _usavaQuantidadeSimples;
+    final grade = _gradePositiva(_grade);
+    final tamanhos = {
+      for (final item in grade.entries) item.key: _somar(item.value),
+    };
+    final quantidade = semGrade
+        ? _lerQuantidade(_quantidade.text)
+        : _somar(tamanhos);
+    final dados = <String, dynamic>{
+      'nome': nome,
+      'descricao': _descricao.text.trim().toUpperCase(),
+      'cor': _corOriginal,
+      'loja': loja,
+      if (_tipoUsuario.isNotEmpty && _tipoUsuario != 'funcionario')
+        'valorReal': _lerMoedaDoCampo(_custo.text),
+      'precoVenda': preco,
+      'categoria': categoria,
+      if (_original['dataCadastro'] == null)
+        'dataCadastro': FieldValue.serverTimestamp(),
+      if (_original['horaCadastro'] == null)
+        'horaCadastro': FieldValue.serverTimestamp(),
+      if (alterarEstoque) 'quantidade': quantidade,
+      if (alterarEstoque && !semGrade) ...{
+        'tamanhos': tamanhos,
+        'tamanhosCores': grade,
+      },
+      if (_editando && alterarEstoque && semGrade) ...{
+        'tamanhos': FieldValue.delete(),
+        'tamanhosCores': FieldValue.delete(),
+      },
+    };
+
+    try {
+      final produtos = _db.collection('produtos');
+      final referencia = _editando
+          ? produtos.doc(widget.produto!.id)
+          : (_novoDocumento ??= produtos.doc());
+      if (_codigo.isEmpty) _codigo = await _gerarCodigo();
+      dados['codigoBarras'] = _codigo;
+      dados['busca'] = [nome.toLowerCase(), _codigo.toLowerCase()];
+      final bytes = _fotoSelecionada;
+      final nomeFoto = _nomeNovaFoto;
+      if (bytes != null && nomeFoto != null) {
+        if (mounted) setState(() => _enviandoFoto = true);
+        dados['foto'] = await _enviarFoto(referencia.id, nomeFoto, bytes);
+        if (mounted) setState(() => _enviandoFoto = false);
+      } else if (_removerFoto || !_editando) {
+        dados['foto'] = '';
+      }
+
+      if (_editando) {
+        await referencia.update(dados);
+      } else {
+        await referencia.set(dados);
+      }
+    } catch (erro) {
+      final etapa = _enviandoFoto ? 'envio da foto' : 'gravação do produto';
+      debugPrint('Cadastro • $etapa: $erro');
+      if (mounted) {
+        final aviso = _enviandoFoto
+            ? _mensagemErroFoto(erro)
+            : 'Não foi possível salvar o produto. Confira a conexão e tente novamente.';
+        setState(() {
+          _salvando = false;
+          _enviandoFoto = false;
+        });
+        _mensagem(aviso);
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    // Usa os dados já gravados, sem uma nova leitura só para imprimir.
+    final etiqueta = _DadosEtiqueta(
+      nome: nome,
+      codigo: _codigo,
+      preco: preco,
+      grade: semGrade ? const {} : grade,
+      tamanhos: semGrade ? const {} : tamanhos,
+    );
+    await _confirmarSalvamento(etiqueta);
+    if (!mounted) return;
+    setState(() => _salvando = false);
+    _voltarAoCatalogo(loja);
+  }
+
+  Future<void> _confirmarSalvamento(_DadosEtiqueta etiqueta) async {
+    final imprimir = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogo) => AlertDialog(
+        icon: const Icon(Icons.check_circle_outline, color: _marca),
+        title: const Text('Produto salvo'),
+        content: Text(etiqueta.nome),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogo).pop(true),
+            child: const Text('Imprimir etiqueta'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _marca),
+            onPressed: () => Navigator.of(dialogo).pop(false),
+            child: const Text('Ver produtos'),
+          ),
+        ],
+      ),
+    );
+    if (imprimir != true || !mounted) return;
+
+    try {
+      Barcode.code128().verify(etiqueta.codigo);
+      final pedido = await showDialog<_PedidoEtiqueta>(
+        context: context,
+        builder: (_) => _DialogoEtiqueta(produto: etiqueta),
+      );
+      if (!mounted || pedido == null) return;
+      final enviado = await _imprimirEtiquetaDupla(etiqueta, pedido);
+      if (mounted) {
+        _mensagem(
+          enviado
+              ? 'Etiqueta enviada à impressora.'
+              : 'A impressão não foi concluída.',
+        );
+      }
+    } catch (erro) {
+      debugPrint('Cadastro • etiqueta: $erro');
+      if (mounted)
+        _mensagem('O produto foi salvo. Não foi possível imprimir a etiqueta.');
+    }
+  }
+
+  void _voltarAoCatalogo(String loja) {
+    final navegador = Navigator.of(context);
+    if (_editando && navegador.canPop()) {
+      navegador.pop();
+      return;
+    }
+    navegador.pushReplacement<void, void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ProdutosView(lojaSelecionada: loja),
+      ),
+    );
+  }
+
+  void _cancelar() {
+    final navegador = Navigator.of(context);
+    if (navegador.canPop()) {
+      navegador.pop();
+    } else {
+      _voltarAoCatalogo(_loja);
+    }
+  }
+
+  Future<void> _sair() async {
+    if (_ocupado) return;
+    setState(() => _saindo = true);
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(builder: (_) => const LoginView()),
+        (_) => false,
+      );
+    } catch (erro) {
+      debugPrint('Cadastro • saída: $erro');
+      if (!mounted) return;
+      setState(() => _saindo = false);
+      _mensagem('Não foi possível sair. Tente novamente.');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: const Color.fromARGB(255, 194, 131, 178),
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: Stack(
-          alignment: Alignment.center,
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Senhorita Cintas Modeladores',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 22,
-                ),
-              ),
+    final loja = _loja;
+    return PopScope(
+      canPop: !_ocupado,
+      child: Scaffold(
+        backgroundColor: _fundo,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          foregroundColor: _marca,
+          elevation: 0,
+          toolbarHeight: 76,
+          titleSpacing: 4,
+          leading: Builder(
+            builder: (contexto) => IconButton(
+              tooltip: 'Abrir menu',
+              icon: const Icon(Icons.menu),
+              onPressed: _ocupado
+                  ? null
+                  : () => Scaffold.of(contexto).openDrawer(),
             ),
-            const Center(
-              child: Text(
-                'ADICIONAR PRODUTO',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 22,
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white),
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginView()),
-              );
-            },
           ),
-        ],
-      ),
-      drawer: Drawer(
-        child: Container(
-          color: primaryColor,
-          child: ListView(
-            padding: EdgeInsets.zero,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              DrawerHeader(
-                decoration: BoxDecoration(color: accentColor),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.store, color: Colors.white, size: 48),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Olá, ${nomeUsuario.toUpperCase()}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+              Text(
+                _editando ? 'Editar produto' : 'Adicionar produto',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: _texto,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              if (tipoUsuario == 'admin')
-                _menuItem(Icons.dashboard, 'Home', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          HomeView(lojaSelecionada: widget.lojaSelecionada),
-                    ),
-                  );
-                }),
-              _menuItem(Icons.attach_money, 'Vender', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        VendasView(lojaSelecionada: widget.lojaSelecionada),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.storefront_outlined,
+                    size: 16,
+                    color: _marca,
                   ),
-                );
-              }),
-              _menuItem(Icons.checkroom, 'Produtos', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ProdutosView(
-                      lojaSelecionada:
-                          widget.lojaSelecionada, // 👈 usa a mesma loja
-                    ),
-                  ),
-                );
-              }),
-
-              _menuItem(Icons.add_box, 'Adicionar Produto', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => AdicionarProdutosView(
-                      lojaSelecionada: widget.lojaSelecionada,
-                    ),
-                  ),
-                );
-              }),
-              _menuItem(Icons.people, 'Clientes', () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        ClientesView(lojaSelecionada: widget.lojaSelecionada),
-                  ),
-                );
-              }),
-              if (tipoUsuario == 'funcionario')
-                _menuItem(Icons.bar_chart, 'Vendas Realizadas', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => VendasRealizadasView(
-                        lojaSelecionada: widget.lojaSelecionada,
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Tooltip(
+                      message: loja.isEmpty
+                          ? 'Loja ativa'
+                          : 'Loja ativa: $loja',
+                      child: Text(
+                        loja.isEmpty ? 'Nenhuma loja selecionada' : loja,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: _marca,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  );
-                }),
-              if (tipoUsuario == 'admin')
-                _menuItem(Icons.show_chart, 'Relatórios', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => RelatoriosView(
-                        lojaSelecionada: widget.lojaSelecionada,
-                      ),
-                    ),
-                  );
-                }),
-              if (tipoUsuario == 'admin')
-                _menuItem(Icons.settings, 'Configurações', () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ConfiguracoesView(
-                        lojaSelecionada: widget.lojaSelecionada,
-                      ),
-                    ),
-                  );
-                }),
+                  ),
+                ],
+              ),
             ],
           ),
+          actions: [
+            IconButton(
+              tooltip: 'Sair',
+              icon: const Icon(Icons.logout),
+              onPressed: _ocupado ? null : _sair,
+            ),
+            const SizedBox(width: 4),
+          ],
+          bottom: const PreferredSize(
+            preferredSize: Size.fromHeight(1),
+            child: Divider(height: 1, color: _borda),
+          ),
         ),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            children: [
-              Card(
-                elevation: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    children: [
-                      TextFormField(
-                        controller: nomeController,
-                        decoration: const InputDecoration(labelText: 'Nome'),
-                        validator: (v) => v == null || v.trim().isEmpty
-                            ? 'Informe o nome'
-                            : null,
-                        onChanged: (value) {
-                          nomeController.value = nomeController.value.copyWith(
-                            text: value.toUpperCase(),
-                            selection: TextSelection.collapsed(
-                              offset: value.length,
-                            ),
-                          );
-                        },
-                      ),
-                      TextFormField(
-                        controller: descricaoController,
-                        decoration: const InputDecoration(
-                          labelText: 'Descrição',
-                        ),
-                        maxLines: 2,
-                        onChanged: (value) {
-                          descricaoController.value = descricaoController.value
-                              .copyWith(
-                                text: value.toUpperCase(),
-                                selection: TextSelection.collapsed(
-                                  offset: value.length,
-                                ),
-                              );
-                        },
-                      ),
-                      DropdownButtonFormField<String>(
-                        value: categoriaSelecionada,
-                        decoration: const InputDecoration(
-                          labelText: 'Categoria',
-                        ),
-                        items: categorias
-                            .map(
-                              (cat) => DropdownMenuItem(
-                                value: cat,
-                                child: Text(cat),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) =>
-                            setState(() => categoriaSelecionada = v),
-                        validator: (v) => v == null || v.isEmpty
-                            ? 'Selecione uma categoria'
-                            : null,
-                      ),
-
-                      DropdownButtonFormField<String>(
-                        value: lojaSelecionada,
-                        decoration: const InputDecoration(labelText: 'Loja'),
-                        items: lojas
-                            .map(
-                              (loja) => DropdownMenuItem(
-                                value: loja,
-                                child: Text(loja),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) => setState(() => lojaSelecionada = v),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Selecione uma loja';
-                          }
-                          return null;
-                        },
-                      ),
-                      if (tipoUsuario != 'funcionario') ...[
-                        TextFormField(
-                          controller: valorRealController,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Valor Real (custo)',
-                          ),
-                          inputFormatters: [
-                            MoneyInputFormatter(leadingSymbol: 'R\$'),
+        drawer: _menu(loja),
+        body: SafeArea(
+          child: AbsorbPointer(
+            absorbing: _ocupado,
+            child: LayoutBuilder(
+              builder: (context, limites) {
+                final margem = limites.maxWidth >= 720 ? 32.0 : 16.0;
+                return SingleChildScrollView(
+                  controller: _rolagem,
+                  padding: EdgeInsets.fromLTRB(margem, 20, margem, 24),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1120),
+                      child: Form(
+                        key: _formulario,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _dadosEFoto(),
+                            const SizedBox(height: 14),
+                            _estoque(),
                           ],
                         ),
-                      ],
-                      TextFormField(
-                        controller: precoVendaController,
-                        decoration: const InputDecoration(
-                          labelText: 'Preço de Venda',
-                        ),
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          MoneyInputFormatter(leadingSymbol: 'R\$'),
-                        ],
                       ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Card(
-                elevation: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Selecionar foto ou tirar foto:',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color.fromARGB(255, 194, 131, 178),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () =>
-                                  selecionarImagem(source: ImageSource.gallery),
-                              icon: const Icon(
-                                Icons.image,
-                                color: Colors.white,
-                              ),
-                              label: const Text(
-                                'Galeria',
-                                style: TextStyle(color: Colors.white),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Color.fromARGB(
-                                  255,
-                                  194,
-                                  131,
-                                  178,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () =>
-                                  selecionarImagem(source: ImageSource.camera),
-                              icon: const Icon(
-                                Icons.camera_alt,
-                                color: Colors.white,
-                              ),
-                              label: const Text(
-                                'Câmera',
-                                style: TextStyle(color: Colors.white),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Color.fromARGB(
-                                  255,
-                                  194,
-                                  131,
-                                  178,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      if (imagemSelecionada != null)
-                        Image.file(
-                          imagemSelecionada!,
-                          height: 100,
-                          fit: BoxFit.cover,
-                        )
-                      else if (urlImagem != null)
-                        Image.network(
-                          urlImagem!,
-                          height: 100,
-                          fit: BoxFit.cover,
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (categoriaSelecionada != null &&
-                  categoriasSemTamanho.contains(categoriaSelecionada!))
-                Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: TextFormField(
-                      controller: quantidadeController,
-                      decoration: const InputDecoration(
-                        labelText: 'Quantidade',
-                      ),
-                      keyboardType: TextInputType.number,
                     ),
                   ),
-                )
-              else
-                Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: _gradeTamanhoCorCompacta(context),
-                  ),
-                ),
-
-              const SizedBox(height: 80),
-            ],
+                );
+              },
+            ),
           ),
         ),
-      ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton.icon(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.cancel),
-              label: const Text('Cancelar'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.grey,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 12,
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            ElevatedButton.icon(
-              onPressed: salvarProduto,
-              icon: const Icon(Icons.save),
-              label: const Text('Salvar'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color.fromARGB(255, 196, 50, 99),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 12,
-                ),
-              ),
-            ),
-          ],
-        ),
+        bottomNavigationBar: _rodape(),
       ),
     );
   }
 
-  void _mostrarEtiquetaDialog(BuildContext context, DocumentSnapshot produto) {
-    final data = produto.data() as Map<String, dynamic>;
-    final tamanhos = data['tamanhos'] as Map<String, dynamic>?;
-    final tc = data['tamanhosCores'] as Map<String, dynamic>?;
-
-    final bool temGrade = tc != null && tc.isNotEmpty;
-    String? tamanhoSelecionado;
-    String? corSelecionadaEtiqueta;
-
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        Printer? impressoraSelecionada;
-
-        return FutureBuilder<List<Printer>>(
-          future: Printing.listPrinters(),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const AlertDialog(
-                content: SizedBox(
-                  height: 100,
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              );
-            }
-
-            final impressoras = snapshot.data!;
-
-            // Seleciona automaticamente a impressora ELGIN L42PRO FULL, se disponível
-            if (impressoraSelecionada == null) {
-              impressoraSelecionada = impressoras.firstWhere(
-                (p) => p.name == 'ELGIN L42PRO ETIQUETA',
-                orElse: () => impressoras.first,
-              );
-            }
-
-            return StatefulBuilder(
-              builder: (ctx, setState) => AlertDialog(
-                title: const Text('Imprimir Etiqueta'),
-                content: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Produto: ${data['nome'] ?? '-'}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      if (temGrade) ...[
-                        DropdownButtonFormField<String>(
-                          value: tamanhoSelecionado,
-                          decoration: const InputDecoration(
-                            labelText: 'Selecione o Tamanho',
-                          ),
-                          items: tc.keys.map((tam) {
-                            return DropdownMenuItem(
-                              value: tam,
-                              child: Text(tam),
-                            );
-                          }).toList(),
-                          onChanged: (value) => setState(() {
-                            tamanhoSelecionado = value;
-                            corSelecionadaEtiqueta =
-                                null; // reset cor ao trocar tamanho
-                          }),
-                        ),
-                        const SizedBox(height: 8),
-                        DropdownButtonFormField<String>(
-                          value: corSelecionadaEtiqueta,
-                          decoration: const InputDecoration(
-                            labelText: 'Selecione a Cor',
-                          ),
-                          items: (tamanhoSelecionado == null)
-                              ? const []
-                              : (tc[tamanhoSelecionado] as Map).keys
-                                    .map<DropdownMenuItem<String>>((cor) {
-                                      return DropdownMenuItem(
-                                        value: cor.toString(),
-                                        child: Text(cor.toString()),
-                                      );
-                                    })
-                                    .toList(),
-                          onChanged: (value) =>
-                              setState(() => corSelecionadaEtiqueta = value),
-                        ),
-                      ] else if (tamanhos != null && tamanhos.isNotEmpty) ...[
-                        DropdownButtonFormField<String>(
-                          value: tamanhoSelecionado,
-                          decoration: const InputDecoration(
-                            labelText: 'Selecione o Tamanho',
-                          ),
-                          items: tamanhos.keys.map((tam) {
-                            return DropdownMenuItem(
-                              value: tam,
-                              child: Text(tam),
-                            );
-                          }).toList(),
-                          onChanged: (value) =>
-                              setState(() => tamanhoSelecionado = value),
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<Printer>(
-                        value: impressoraSelecionada,
-                        decoration: const InputDecoration(
-                          labelText: 'Selecionar Impressora',
-                        ),
-                        items: impressoras.map((printer) {
-                          return DropdownMenuItem(
-                            value: printer,
-                            child: Text(printer.name),
-                          );
-                        }).toList(),
-                        onChanged: (value) =>
-                            setState(() => impressoraSelecionada = value),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Preço: R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: 200,
-                        height: 60,
-                        child: BarcodeWidget(
-                          barcode: Barcode.code128(),
-                          data: (data['codigoBarras'] ?? '') as String,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Cancelar'),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      // validações
-                      if (temGrade) {
-                        if (tamanhoSelecionado == null ||
-                            corSelecionadaEtiqueta == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Selecione tamanho e cor.'),
-                            ),
-                          );
-                          return;
-                        }
-                      } else if (tamanhos != null && tamanhos.isNotEmpty) {
-                        if (tamanhoSelecionado == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Selecione um tamanho.'),
-                            ),
-                          );
-                          return;
-                        }
-                      }
-
-                      if (impressoraSelecionada == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Selecione uma impressora.'),
-                          ),
-                        );
-                        return;
-                      }
-
-                      // fecha o diálogo de etiqueta antes de imprimir
-                      Navigator.pop(ctx);
-
-                      try {
-                        await _imprimirEtiquetaDupla(
-                          data,
-                          produto.id,
-                          tamanhoSelecionado,
-                          impressoraSelecionada!,
-                          corSelecionadaEtiqueta: temGrade
-                              ? corSelecionadaEtiqueta
-                              : null,
-                        );
-                      } catch (_) {
-                        // mesmo que falhe a impressão, seguimos para a lista
-                      }
-
-                      if (!mounted) return;
-
-                      // redireciona para ProdutosView
-                      Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute(
-                          builder: (_) => ProdutosView(
-                            lojaSelecionada: widget.lojaSelecionada,
-                          ),
-                        ),
-                        (route) => false,
-                      );
-                    },
-
-                    child: const Text('Imprimir'),
-                  ),
-                ],
-              ),
-            );
-          },
+  Widget _dadosEFoto() {
+    return LayoutBuilder(
+      builder: (context, limites) {
+        final dados = _painel('Dados do produto', _camposProduto());
+        final foto = _painel('Foto do produto', _campoFoto());
+        if (limites.maxWidth >= 760) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 2, child: dados),
+              const SizedBox(width: 14),
+              Expanded(child: foto),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [dados, const SizedBox(height: 14), foto],
         );
       },
     );
   }
 
-  Future<void> _imprimirEtiquetaDupla(
-    Map<String, dynamic> data,
-    String id,
-    String? tamanhoSelecionado,
-    Printer impressoraSelecionada, {
-    String? corSelecionadaEtiqueta,
-  }) async {
-    final doc = pw.Document();
-
-    // Tamanho ajustado para caber duas etiquetas na largura de 90mm
-    const double etiquetaLargura = 36 * PdfPageFormat.mm;
-    const double etiquetaAltura = 25 * PdfPageFormat.mm;
-
-    final codigo = data['codigoBarras'] ?? '';
-
-    pw.Widget _etiqueta() {
-      return pw.Container(
-        width: etiquetaLargura,
-        height: etiquetaAltura,
-        padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-        child: pw.Column(
-          mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
-          crossAxisAlignment: pw.CrossAxisAlignment.center,
-          children: [
-            pw.Text(
-              (data['nome'] ?? 'Sem nome').toString().length > 20
-                  ? '${data['nome'].toString().substring(0, 20)}…'
-                  : data['nome'] ?? 'Sem nome',
-              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-              maxLines: 1,
-              textAlign: pw.TextAlign.center,
-            ),
-            if (tamanhoSelecionado != null)
-              pw.Text(
-                'Tam: $tamanhoSelecionado',
-                style: const pw.TextStyle(fontSize: 6),
-                textAlign: pw.TextAlign.center,
+  Widget _camposProduto() {
+    final opcoes = {...categorias, if (_categoria != null) _categoria!};
+    final venda = _campoMoeda(_precoVenda, 'Preço de venda');
+    final podeVerCusto =
+        _tipoUsuario.isNotEmpty && _tipoUsuario != 'funcionario';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextFormField(
+          controller: _nome,
+          textCapitalization: TextCapitalization.characters,
+          textInputAction: TextInputAction.next,
+          decoration: _decoracao('Nome do produto'),
+          inputFormatters: const [_NomeEmMaiusculas()],
+          validator: (valor) => (valor?.trim().isEmpty ?? true)
+              ? 'Informe o nome do produto.'
+              : null,
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: _categoria,
+          isExpanded: true,
+          decoration: _decoracao('Categoria'),
+          items: [
+            for (final categoria in opcoes)
+              DropdownMenuItem(
+                value: categoria,
+                child: Text(categoria, overflow: TextOverflow.ellipsis),
               ),
-            pw.Text(
-              'R\$ ${data['precoVenda']?.toStringAsFixed(2) ?? '-'}',
-              style: const pw.TextStyle(fontSize: 6),
-              textAlign: pw.TextAlign.center,
-            ),
-            pw.BarcodeWidget(
-              barcode: Barcode.code128(),
-              data: codigo,
-              width: 100,
-              height: 30,
-              drawText: false,
-            ),
-            pw.Text(
-              codigo,
-              style: const pw.TextStyle(fontSize: 6),
-              textAlign: pw.TextAlign.center,
-            ),
           ],
+          onChanged: (categoria) => setState(() => _categoria = categoria),
+          validator: (valor) => valor == null ? 'Selecione a categoria.' : null,
         ),
-      );
-    }
-
-    doc.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat(
-          90 * PdfPageFormat.mm, // largura total do papel
-          etiquetaAltura,
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _descricao,
+          textCapitalization: TextCapitalization.characters,
+          minLines: 2,
+          maxLines: 3,
+          decoration: _decoracao('Descrição'),
         ),
-        margin: const pw.EdgeInsets.symmetric(horizontal: 4 * PdfPageFormat.mm),
-        build: (context) {
-          return pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.center,
-            children: [
-              _etiqueta(),
-              pw.SizedBox(width: 10), // espaço entre etiquetas
-              _etiqueta(),
-            ],
-          );
-        },
-      ),
-    );
-
-    // Enviar diretamente para a impressora
-    await Printing.directPrintPdf(
-      printer: impressoraSelecionada,
-      onLayout: (_) => doc.save(),
+        const SizedBox(height: 12),
+        if (podeVerCusto)
+          LayoutBuilder(
+            builder: (context, limites) {
+              final custo = _campoMoeda(_custo, 'Valor real (custo)');
+              if (limites.maxWidth >= 440) {
+                return Row(
+                  children: [
+                    Expanded(child: custo),
+                    const SizedBox(width: 12),
+                    Expanded(child: venda),
+                  ],
+                );
+              }
+              return Column(
+                children: [custo, const SizedBox(height: 12), venda],
+              );
+            },
+          )
+        else
+          venda,
+        if (_editando && _codigo.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          SelectableText(
+            'Código de barras: $_codigo',
+            style: const TextStyle(color: _suave, fontSize: 13),
+          ),
+        ],
+      ],
     );
   }
 
-  Widget _gradeTamanhoCorCompacta(BuildContext context) {
-    // garante as chaves
-    for (final t in tamanhosDisponiveis) {
-      tamanhosCoresSelecionados.putIfAbsent(t, () => <String, int>{});
-    }
-
-    int somaCores(Map<String, int> m) =>
-        m.values.fold<int>(0, (acc, v) => acc + (v < 0 ? 0 : v));
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Tamanhos, Quantidade e Cores',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Color.fromARGB(255, 194, 131, 178),
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        // Cabeçalho
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF7F7F7),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: const [
-              SizedBox(
-                width: 64,
-                child: Text(
-                  'Tam.',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              SizedBox(
-                width: 120, // +10px
-                child: Text(
-                  'Quantidade total',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              SizedBox(
-                width: 160, // botão mais largo
-                child: Text(
-                  '       Cores',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  'Resumo',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 6),
-
-        ...tamanhosDisponiveis.map((tam) {
-          final mapCores = tamanhosCoresSelecionados[tam]!;
-          final total = somaCores(mapCores);
-
-          // garante controller e sincroniza texto inicial
-          final qtdCtrl = _qtdCtrlPorTam.putIfAbsent(
-            tam,
-            () => TextEditingController(text: total.toString()),
-          );
-          _sincronizarQtdTotalComCores(tam);
-
-          return Card(
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  // Tamanho
-                  SizedBox(
-                    width: 64,
-                    child: Text(
-                      tam,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-
-                  // Quantidade total (editável ou somente leitura)
-                  SizedBox(
-                    width: 120,
-                    child: TextFormField(
-                      controller: qtdCtrl, // <-- agora usa controller
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        hintText: '0',
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                      ),
-                      onChanged: (v) {
-                        final novo = int.tryParse(v) ?? 0;
-                        setState(() {
-                          if (mapCores.isEmpty) {
-                            mapCores['SEM COR'] = novo;
-                          } else {
-                            final somaAtual = somaCores(mapCores);
-                            if (somaAtual <= 0) {
-                              final primeira = mapCores.keys.first;
-                              mapCores[primeira] = novo;
-                            } else {
-                              final fator = novo / somaAtual;
-                              final chaves = mapCores.keys.toList();
-                              int acumulado = 0;
-                              for (var i = 0; i < chaves.length; i++) {
-                                final k = chaves[i];
-                                int novaQtd = (mapCores[k]! * fator).round();
-                                if (i == chaves.length - 1) {
-                                  novaQtd =
-                                      novo -
-                                      acumulado; // corrige arredondamento
-                                }
-                                mapCores[k] = novaQtd < 0 ? 0 : novaQtd;
-                                acumulado += mapCores[k]!;
-                              }
-                            }
-                          }
-                          // garante que o campo permanece sincronizado
-                          _sincronizarQtdTotalComCores(tam);
-                        });
-                      },
-                    ),
-                  ),
-
-                  // Botão "Cores" (MAIOR)
-                  SizedBox(
-                    width: 160, // mais largo
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(160, 44), // altura maior
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        // você pode ajustar o background se quiser:
-                        // backgroundColor: const Color(0xFFec407a),
-                      ),
-                      icon: const Icon(Icons.palette_outlined, size: 20),
-                      label: const Text(
-                        'Selecionar cor',
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      onPressed: () async {
-                        final atualizado = await _abrirSeletorCores(
-                          context: context,
-                          titulo: 'Cores para $tam',
-                          coresDisponiveis: coresDisponiveis,
-                          mapaAtual: Map<String, int>.from(mapCores),
-                        );
-                        if (atualizado != null) {
-                          setState(() {
-                            atualizado.removeWhere((_, qtd) => (qtd <= 0));
-                            tamanhosCoresSelecionados[tam] = atualizado;
-
-                            // >>> ATUALIZA O TOTAL DO TAMANHO ASSIM QUE SELECIONAR AS CORES
-                            _sincronizarQtdTotalComCores(tam);
-                          });
-                        }
-                      },
-                    ),
-                  ),
-
-                  // Resumo: bolinhas + contagem
-                  Expanded(
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: mapCores.entries.where((e) => e.value > 0).map((
-                        e,
-                      ) {
-                        final corNome = e.key;
-                        final qtd = e.value;
-                        final cor =
-                            coresDisponiveis[corNome] ??
-                            const Color(0xFFEEEEEE);
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.black12),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 14,
-                                height: 14,
-                                margin: const EdgeInsets.only(right: 6),
-                                decoration: BoxDecoration(
-                                  color: cor,
-                                  border: Border.all(color: Colors.black26),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                              ),
-                              Text(
-                                '$corNome ($qtd)',
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }).toList(),
-
-        const SizedBox(height: 4),
-
-        // Rodapé opcional: aplicar a todas / limpar zeros
-        Row(
-          children: [
-            TextButton.icon(
-              icon: const Icon(Icons.copy_all_outlined),
-              label: const Text('Aplicar cores do 1º tamanho para todos'),
-              onPressed: tamanhosDisponiveis.isEmpty
-                  ? null
-                  : () {
-                      setState(() {
-                        final t0 = tamanhosDisponiveis.first;
-                        final base = Map<String, int>.from(
-                          tamanhosCoresSelecionados[t0]!,
-                        );
-                        for (final t in tamanhosDisponiveis.skip(1)) {
-                          tamanhosCoresSelecionados[t] = Map<String, int>.from(
-                            base,
-                          );
-                          _sincronizarQtdTotalComCores(
-                            t,
-                          ); // mantém total em sincronia
-                        }
-                      });
-                    },
-            ),
-            const SizedBox(width: 8),
-            TextButton.icon(
-              icon: const Icon(Icons.cleaning_services_outlined),
-              label: const Text('Remover cores com 0'),
-              onPressed: () {
-                setState(() {
-                  for (final t in tamanhosDisponiveis) {
-                    tamanhosCoresSelecionados[t]!.removeWhere(
-                      (_, qtd) => qtd <= 0,
-                    );
-                    _sincronizarQtdTotalComCores(t);
-                  }
-                });
-              },
-            ),
-          ],
+  Widget _campoMoeda(TextEditingController controller, String rotulo) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      decoration: _decoracao(rotulo),
+      inputFormatters: [
+        MoneyInputFormatter(
+          leadingSymbol: 'R\$',
+          mantissaLength: 2,
+          thousandSeparator: ThousandSeparator.Period,
         ),
       ],
     );
   }
 
-  Future<Map<String, int>?> _abrirSeletorCores({
-    required BuildContext context,
-    required String titulo,
-    required Map<String, Color> coresDisponiveis,
-    required Map<String, int> mapaAtual,
-  }) async {
-    return showModalBottomSheet<Map<String, int>>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        // estado local para +/-
-        final ValueNotifier<Map<String, int>> selecao =
-            ValueNotifier<Map<String, int>>(Map<String, int>.from(mapaAtual));
+  Widget _campoFoto() {
+    final arquivo = _fotoSelecionada;
+    final Widget imagem;
+    if (arquivo != null) {
+      imagem = Image.memory(
+        arquivo,
+        fit: BoxFit.contain,
+        errorBuilder: (context, erro, pilha) => _estadoFoto(
+          Icons.broken_image_outlined,
+          'A foto selecionada é inválida.',
+        ),
+      );
+    } else if (!_removerFoto && _fotoAtual.isNotEmpty) {
+      imagem = Image.network(
+        _fotoAtual,
+        fit: BoxFit.contain,
+        webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
+        errorBuilder: (context, erro, pilha) => _estadoFoto(
+          Icons.broken_image_outlined,
+          'Não foi possível carregar a foto salva.',
+        ),
+      );
+    } else {
+      imagem = _estadoFoto(
+        Icons.image_outlined,
+        _removerFoto
+            ? 'A foto será removida ao salvar o produto.'
+            : 'Nenhuma foto cadastrada',
+      );
+    }
 
-        void inc(String cor) {
-          final m = Map<String, int>.from(selecao.value);
-          m[cor] = (m[cor] ?? 0) + 1;
-          selecao.value = m;
-        }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(height: 176, child: imagem),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: _marca),
+              onPressed: _ocupado
+                  ? null
+                  : () => _selecionarFoto(ImageSource.gallery),
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('Galeria'),
+            ),
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: _marca),
+              onPressed: _ocupado
+                  ? null
+                  : () => _selecionarFoto(ImageSource.camera),
+              icon: const Icon(Icons.photo_camera_outlined),
+              label: Text(_temFoto ? 'Refazer foto' : 'Câmera'),
+            ),
+            if (_temFoto)
+              TextButton.icon(
+                onPressed: _ocupado
+                    ? null
+                    : () => _alterarRemocaoFoto(remover: true),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Excluir foto'),
+              ),
+            if (_fotoAtual.isNotEmpty && (arquivo != null || _removerFoto))
+              TextButton(
+                onPressed: _ocupado
+                    ? null
+                    : () => _alterarRemocaoFoto(remover: false),
+                child: const Text('Restaurar foto anterior'),
+              ),
+          ],
+        ),
+        if (_selecionandoFoto) const LinearProgressIndicator(color: _marca),
+      ],
+    );
+  }
 
-        void dec(String cor) {
-          final m = Map<String, int>.from(selecao.value);
-          final atual = (m[cor] ?? 0) - 1;
-          m[cor] = atual < 0 ? 0 : atual;
-          selecao.value = m;
-        }
-
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(ctx).viewInsets.bottom,
-            left: 16,
-            right: 16,
-            top: 16,
-          ),
+  Widget _estadoFoto(IconData icone, String mensagem) {
+    return ColoredBox(
+      color: _rosaClaro,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                height: 4,
-                width: 48,
-                decoration: BoxDecoration(
-                  color: Colors.black26,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(height: 12),
+              Icon(icone, color: _marca, size: 32),
+              const SizedBox(height: 8),
               Text(
-                titulo,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
+                mensagem,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: _suave),
               ),
-              const SizedBox(height: 12),
-
-              Flexible(
-                child: ValueListenableBuilder<Map<String, int>>(
-                  valueListenable: selecao,
-                  builder: (_, mapa, __) {
-                    return SingleChildScrollView(
-                      child: Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: coresDisponiveis.entries.map((e) {
-                          final corNome = e.key;
-                          final color = e.value;
-                          final qtd = mapa[corNome] ?? 0;
-
-                          return Container(
-                            width: 170,
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.black12),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Container(
-                                      width: 16,
-                                      height: 16,
-                                      decoration: BoxDecoration(
-                                        color: color,
-                                        border: Border.all(
-                                          color: Colors.black26,
-                                        ),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        corNome,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(
-                                        Icons.remove_circle_outline,
-                                      ),
-                                      onPressed: () => dec(corNome),
-                                    ),
-                                    SizedBox(
-                                      width: 40,
-                                      child: Text(
-                                        '$qtd',
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(
-                                        Icons.add_circle_outline,
-                                      ),
-                                      onPressed: () => inc(corNome),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    );
-                  },
-                ),
-              ),
-
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      child: const Text('Cancelar'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.check),
-                      onPressed: () {
-                        final resultado = Map<String, int>.from(selecao.value);
-                        // normaliza zeros
-                        resultado.removeWhere((_, qtd) => qtd <= 0);
-                        Navigator.of(ctx).pop(resultado);
-                      },
-                      label: const Text('Aplicar'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _estoque() {
+    if (_categoria == null) {
+      return _painel(
+        'Estoque',
+        const Text(
+          'Selecione uma categoria para configurar o estoque.',
+          style: TextStyle(color: _suave),
+        ),
+      );
+    }
+    if (_semGrade) {
+      return _painel(
+        'Estoque',
+        Align(
+          alignment: Alignment.centerLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: TextFormField(
+              controller: _quantidade,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              onChanged: (_) => _estoqueAlterado = true,
+              decoration: _decoracao('Quantidade'),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final tamanhos = _tamanhos;
+    final total = _grade.values.fold<int>(
+      0,
+      (soma, cores) => soma + _somar(cores),
+    );
+    return _painel(
+      'Grade de tamanhos e cores',
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              _selo('Total em estoque: ${_numero.format(total)}'),
+              TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: _marca),
+                onPressed: _somar(_grade[tamanhos.first]) == 0
+                    ? null
+                    : () => _copiarGrade(tamanhos.first),
+                icon: const Icon(Icons.copy_all_outlined),
+                label: Text('Copiar grade de ${tamanhos.first} para os demais'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final tamanho in tamanhos) _linhaDaGrade(tamanho),
+        ],
+      ),
+    );
+  }
+
+  Widget _linhaDaGrade(String tamanho) {
+    final cores = _grade[tamanho] ?? const <String, int>{};
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: _fundo,
+          border: Border.all(color: _borda),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: LayoutBuilder(
+            builder: (context, limites) {
+              final campo = TextFormField(
+                controller: _totaisPorTamanho[tamanho],
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: _decoracao('Qtd. total', densa: true),
+                onChanged: (valor) =>
+                    _alterarTotal(tamanho, _lerQuantidade(valor)),
+              );
+              final botao = OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(foregroundColor: _marca),
+                onPressed: () => _editarCores(tamanho),
+                icon: const Icon(Icons.palette_outlined, size: 18),
+                label: const Text('Cores'),
+              );
+              final controle = Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 48,
+                    child: Text(
+                      tamanho,
+                      style: const TextStyle(
+                        color: _texto,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 84, child: campo),
+                  botao,
+                ],
+              );
+              final resumo = Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final item in cores.entries)
+                    if (item.value > 0)
+                      _selo(
+                        '${item.key} · ${_numero.format(item.value)}',
+                        cor:
+                            coresDisponiveis[item.key] ??
+                            const Color(0xFFE6DCE2),
+                      ),
+                ],
+              );
+              if (limites.maxWidth >= 560) {
+                return Row(
+                  children: [
+                    SizedBox(width: 258, child: controle),
+                    const SizedBox(width: 12),
+                    Expanded(child: resumo),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  controle,
+                  if (cores.isNotEmpty) ...[const SizedBox(height: 8), resumo],
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _alterarTotal(String tamanho, int novoTotal) {
+    setState(() {
+      _estoqueAlterado = true;
+      final base = _proporcoes[tamanho] ?? const <String, int>{};
+      _grade[tamanho] = _redistribuir(base, novoTotal);
+    });
+  }
+
+  void _atualizarGrade(String tamanho, Map<String, int> cores) {
+    _grade[tamanho] = cores;
+    _proporcoes[tamanho] = cores;
+    _totaisPorTamanho[tamanho]!.text = _somar(cores).toString();
+    _estoqueAlterado = true;
+  }
+
+  Future<void> _editarCores(String tamanho) async {
+    final atual = _grade[tamanho] ?? const <String, int>{};
+    final cores = await showDialog<Map<String, int>>(
+      context: context,
+      builder: (_) => _DialogoCores(
+        tamanho: tamanho,
+        cores: {
+          ...coresDisponiveis,
+          for (final cor in atual.keys)
+            if (!coresDisponiveis.containsKey(cor))
+              cor: const Color(0xFFE6DCE2),
+        },
+        atual: atual,
+      ),
+    );
+    if (mounted && cores != null) {
+      setState(() => _atualizarGrade(tamanho, cores));
+    }
+  }
+
+  Future<void> _copiarGrade(String origem) async {
+    final confirmou = await showDialog<bool>(
+      context: context,
+      builder: (contexto) => AlertDialog(
+        title: Text('Copiar grade de $origem?'),
+        content: const Text(
+          'As cores e quantidades dos demais tamanhos serão substituídas.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(contexto).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _marca),
+            onPressed: () => Navigator.of(contexto).pop(true),
+            child: const Text('Copiar'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmou != true) return;
+    final base = _grade[origem]!;
+    setState(() {
+      for (final tamanho in _tamanhos) {
+        if (tamanho != origem) _atualizarGrade(tamanho, Map.of(base));
+      }
+    });
+  }
+
+  Widget _rodape() {
+    return Material(
+      color: Colors.white,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_salvando)
+              const LinearProgressIndicator(color: _marca)
+            else
+              const Divider(height: 1, color: _borda),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1120),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  heightFactor: 1,
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 10,
+                    runSpacing: 4,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _ocupado ? null : _cancelar,
+                        child: const Text('Cancelar'),
+                      ),
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(backgroundColor: _marca),
+                        onPressed: _ocupado || _loja.isEmpty ? null : _salvar,
+                        icon: const Icon(Icons.save_outlined, size: 19),
+                        label: Text(
+                          _enviandoFoto
+                              ? 'Enviando foto…'
+                              : _salvando
+                              ? 'Salvando…'
+                              : 'Salvar produto',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _menu(String loja) {
+    return Drawer(
+      backgroundColor: Colors.white,
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(12),
+          children: [
+            ListTile(
+              leading: const Icon(Icons.storefront_outlined, color: _marca),
+              title: Text(_nomeUsuario.isEmpty ? 'Senhorita' : _nomeUsuario),
+              subtitle: loja.isEmpty ? null : Text(loja),
+            ),
+            const Divider(color: _borda),
+            if (_tipoUsuario == 'admin')
+              _linkMenu(
+                Icons.dashboard_outlined,
+                'Início',
+                () => HomeView(lojaSelecionada: loja),
+              ),
+            _linkMenu(
+              Icons.point_of_sale,
+              'Nova venda',
+              () => VendasView(lojaSelecionada: loja),
+            ),
+            _linkMenu(
+              Icons.checkroom,
+              'Produtos',
+              () => ProdutosView(lojaSelecionada: loja),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_box_outlined),
+              title: Text(_editando ? 'Editar produto' : 'Adicionar produto'),
+              selected: true,
+              selectedColor: _marca,
+              selectedTileColor: _rosaClaro,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              onTap: () => Navigator.of(context).pop(),
+            ),
+            _linkMenu(
+              Icons.people_outline,
+              'Clientes',
+              () => ClientesView(lojaSelecionada: loja),
+            ),
+            if (_tipoUsuario == 'funcionario')
+              _linkMenu(
+                Icons.receipt_long_outlined,
+                'Vendas realizadas',
+                () => VendasRealizadasView(lojaSelecionada: loja),
+              ),
+            if (_tipoUsuario == 'admin') ...[
+              _linkMenu(
+                Icons.bar_chart,
+                'Relatórios',
+                () => RelatoriosView(lojaSelecionada: loja),
+              ),
+              _linkMenu(
+                Icons.settings_outlined,
+                'Configurações',
+                () => ConfiguracoesView(lojaSelecionada: loja),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _linkMenu(IconData icone, String rotulo, Widget Function() pagina) {
+    return ListTile(
+      leading: Icon(icone, color: _suave),
+      title: Text(rotulo),
+      onTap: () {
+        if (_ocupado) return;
+        final navegador = Navigator.of(context);
+        navegador.pop();
+        if (_loja.isEmpty) {
+          _mensagem('Selecione uma loja primeiro.');
+          return;
+        }
+        if (_editando && rotulo == 'Produtos' && navegador.canPop()) {
+          navegador.pop();
+          return;
+        }
+        navegador.pushReplacement<void, void>(
+          MaterialPageRoute<void>(builder: (_) => pagina()),
         );
       },
     );
   }
 }
 
-Widget _menuItem(IconData icon, String title, VoidCallback onTap) {
-  return ListTile(
-    leading: Icon(icon, color: Colors.white),
-    title: Text(title, style: const TextStyle(color: Colors.white)),
-    onTap: onTap,
+class _NomeEmMaiusculas extends TextInputFormatter {
+  const _NomeEmMaiusculas();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue antigo,
+    TextEditingValue novo,
+  ) {
+    if (novo.composing.isValid && !novo.composing.isCollapsed) return novo;
+    final original = novo.text;
+    final maiusculo = original.toUpperCase();
+    if (original == maiusculo) return novo;
+
+    final selecao = novo.selection;
+    int deslocamento(int posicao) {
+      return original
+          .substring(0, posicao.clamp(0, original.length).toInt())
+          .toUpperCase()
+          .length;
+    }
+
+    return novo.copyWith(
+      text: maiusculo,
+      selection: selecao.isValid
+          ? selecao.copyWith(
+              baseOffset: deslocamento(selecao.baseOffset),
+              extentOffset: deslocamento(selecao.extentOffset),
+            )
+          : selecao,
+      composing: TextRange.empty,
+    );
+  }
+}
+
+InputDecoration _decoracao(String rotulo, {bool densa = false}) {
+  return InputDecoration(
+    labelText: rotulo,
+    filled: true,
+    fillColor: Colors.white,
+    isDense: densa,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: _borda),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: _borda),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: _marca, width: 1.5),
+    ),
+  );
+}
+
+Widget _painel(String titulo, Widget conteudo) {
+  return DecoratedBox(
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: _borda),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            titulo,
+            style: const TextStyle(
+              color: _texto,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 14),
+          conteudo,
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _selo(String texto, {Color? cor}) {
+  return DecoratedBox(
+    decoration: BoxDecoration(
+      color: _rosaClaro,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (cor != null) ...[_amostraDeCor(cor), const SizedBox(width: 6)],
+          Flexible(
+            child: Text(
+              texto,
+              style: const TextStyle(
+                color: _marca,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _amostraDeCor(Color cor) {
+  return Container(
+    width: 14,
+    height: 14,
+    decoration: BoxDecoration(
+      color: cor,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.black26),
+    ),
+  );
+}
+
+String _campo(Object? valor, [String padrao = '']) {
+  final texto = valor?.toString().trim() ?? '';
+  return texto.isEmpty ? padrao : texto;
+}
+
+String _precoParaCampo(Object? valor) {
+  final texto = _campo(valor).replaceAll('R\$', '').trim();
+  final preco = valor is num
+      ? valor
+      : num.tryParse(
+          texto.contains(',')
+              ? texto.replaceAll('.', '').replaceAll(',', '.')
+              : texto,
+        );
+  return preco == null || !preco.isFinite ? '' : _moeda.format(preco);
+}
+
+String _preco(num? valor) => valor == null ? '—' : _moeda.format(valor);
+
+double _lerMoedaDoCampo(String texto) {
+  return (double.tryParse(texto.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0) / 100;
+}
+
+int _lerQuantidade(Object? valor) {
+  final quantidade = valor is num ? valor : num.tryParse(_campo(valor));
+  return quantidade == null || !quantidade.isFinite
+      ? 0
+      : max(0, quantidade.toInt());
+}
+
+Map<String, int> _lerQuantidades(Object? dados) {
+  if (dados is! Map) return {};
+  final resultado = <String, int>{};
+  for (final item in dados.entries) {
+    final quantidade = _lerQuantidade(item.value);
+    if (quantidade > 0) resultado[item.key.toString()] = quantidade;
+  }
+  return resultado;
+}
+
+int _somar(Map<String, int>? quantidades) {
+  return quantidades?.values.fold<int>(0, (total, atual) => total + atual) ?? 0;
+}
+
+Map<String, Map<String, int>> _gradePositiva(
+  Map<String, Map<String, int>> grade,
+) {
+  final resultado = <String, Map<String, int>>{};
+  for (final tamanho in grade.entries) {
+    final positivas = _lerQuantidades(tamanho.value);
+    if (positivas.isNotEmpty) resultado[tamanho.key] = positivas;
+  }
+  return resultado;
+}
+
+Map<String, int> _redistribuir(Map<String, int> cores, int novoTotal) {
+  final totalAtual = _somar(cores);
+  if (totalAtual == 0) {
+    final cor = cores.isEmpty ? 'SEM COR' : cores.keys.first;
+    return {cor: novoTotal};
+  }
+
+  // Arredonda a soma acumulada para distribuir exatamente o total digitado.
+  var originalAcumulado = 0;
+  var novoAcumulado = 0;
+  final resultado = <String, int>{};
+  for (final cor in cores.entries) {
+    originalAcumulado += cor.value;
+    final ateAgora = (originalAcumulado * novoTotal) ~/ totalAtual;
+    resultado[cor.key] = ateAgora - novoAcumulado;
+    novoAcumulado = ateAgora;
+  }
+  return resultado;
+}
+
+class _DialogoCores extends StatefulWidget {
+  const _DialogoCores({
+    required this.tamanho,
+    required this.cores,
+    required this.atual,
+  });
+
+  final String tamanho;
+  final Map<String, Color> cores;
+  final Map<String, int> atual;
+
+  @override
+  State<_DialogoCores> createState() => _DialogoCoresState();
+}
+
+class _DialogoCoresState extends State<_DialogoCores> {
+  final _busca = TextEditingController();
+  final _campos = <String, TextEditingController>{};
+
+  @override
+  void initState() {
+    super.initState();
+    // Destaca primeiro as cores que já têm unidades neste tamanho.
+    final nomes = {
+      ...widget.atual.keys.where((nome) => (widget.atual[nome] ?? 0) > 0),
+      ...widget.cores.keys,
+    };
+    for (final nome in nomes) {
+      _campos[nome] = TextEditingController(text: '${widget.atual[nome] ?? 0}');
+    }
+  }
+
+  @override
+  void dispose() {
+    _busca.dispose();
+    for (final campo in _campos.values) {
+      campo.dispose();
+    }
+    super.dispose();
+  }
+
+  Map<String, int> _selecionadas() => _lerQuantidades({
+    for (final item in _campos.entries) item.key: item.value.text,
+  });
+
+  void _ajustarQuantidade(TextEditingController campo, int delta) {
+    final quantidade = max(0, _lerQuantidade(campo.text) + delta);
+    final texto = quantidade.toString();
+    setState(() {
+      campo.value = TextEditingValue(
+        text: texto,
+        selection: TextSelection.collapsed(offset: texto.length),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final termo = _busca.text.trim().toLowerCase();
+    final visiveis = _campos.keys
+        .where((nome) => nome.toLowerCase().contains(termo))
+        .toList();
+    final selecionadas = _selecionadas();
+    final rodape = _rodape(selecionadas);
+
+    // Dialog recebe limites da janela, sem medir o tamanho intrínseco da lista.
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      backgroundColor: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: SizedBox(
+        width: 540,
+        height: 580,
+        child: LayoutBuilder(
+          builder: (context, limites) {
+            final compacto = limites.maxHeight < 220;
+            return Column(
+              children: [
+                Expanded(
+                  child: CustomScrollView(
+                    slivers: [
+                      SliverToBoxAdapter(child: _cabecalho()),
+                      if (visiveis.isEmpty)
+                        const SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'Nenhuma cor encontrada.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: _suave),
+                            ),
+                          ),
+                        )
+                      else
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                          sliver: SliverList(
+                            delegate: SliverChildBuilderDelegate((
+                              context,
+                              indice,
+                            ) {
+                              final nome = visiveis[indice];
+                              return _linhaDeCor(
+                                nome,
+                                selecionada: selecionadas.containsKey(nome),
+                              );
+                            }, childCount: visiveis.length),
+                          ),
+                        ),
+                      if (compacto) SliverToBoxAdapter(child: rodape),
+                    ],
+                  ),
+                ),
+                if (!compacto) rodape,
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _cabecalho() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Cores para ${widget.tamanho}',
+                  style: const TextStyle(
+                    color: _texto,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Fechar sem aplicar',
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          TextField(
+            controller: _busca,
+            onChanged: (_) => setState(() {}),
+            decoration: _decoracao('Buscar cor').copyWith(
+              prefixIcon: const Icon(Icons.search, color: _marca),
+              suffixIcon: _busca.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Limpar busca',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () => setState(_busca.clear),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _linhaDeCor(String nome, {required bool selecionada}) {
+    final campo = _campos[nome]!;
+    final cor = widget.cores[nome] ?? const Color(0xFFE6DCE2);
+    return Container(
+      key: ValueKey(nome),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: selecionada ? _rosaClaro : _fundo,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _borda),
+      ),
+      child: Row(
+        children: [
+          _amostraDeCor(cor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              nome,
+              style: TextStyle(
+                color: _texto,
+                fontWeight: selecionada ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Diminuir: $nome',
+            onPressed: selecionada ? () => _ajustarQuantidade(campo, -1) : null,
+            icon: const Icon(Icons.remove_circle_outline, size: 20),
+          ),
+          SizedBox(
+            width: 60,
+            child: TextField(
+              controller: campo,
+              textAlign: TextAlign.center,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              onChanged: (_) => setState(() {}),
+              decoration: _decoracao('Qtd.', densa: true).copyWith(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 10,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Aumentar: $nome',
+            onPressed: () => _ajustarQuantidade(campo, 1),
+            icon: const Icon(Icons.add_circle_outline, color: _marca, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rodape(Map<String, int> selecionadas) {
+    final total = _numero.format(_somar(selecionadas));
+    final qtdCores = selecionadas.length;
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: _borda)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Total: $total · ${qtdCores == 1 ? '1 cor' : '$qtdCores cores'}',
+              style: const TextStyle(
+                color: _marca,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _marca),
+                  onPressed: () => Navigator.of(context).pop(selecionadas),
+                  child: const Text('Aplicar cores'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DadosEtiqueta {
+  const _DadosEtiqueta({
+    required this.nome,
+    required this.codigo,
+    required this.preco,
+    required this.tamanhos,
+    required this.grade,
+  });
+
+  final String nome;
+  final String codigo;
+  final double preco;
+  final Map<String, int> tamanhos;
+  final Map<String, Map<String, int>> grade;
+}
+
+class _PedidoEtiqueta {
+  const _PedidoEtiqueta(this.impressora, this.tamanho, this.cor);
+
+  final Printer impressora;
+  final String? tamanho;
+  final String? cor;
+}
+
+class _DialogoEtiqueta extends StatefulWidget {
+  const _DialogoEtiqueta({required this.produto});
+
+  final _DadosEtiqueta produto;
+
+  @override
+  State<_DialogoEtiqueta> createState() => _DialogoEtiquetaState();
+}
+
+class _DialogoEtiquetaState extends State<_DialogoEtiqueta> {
+  late Future<List<Printer>> _impressoras;
+  Printer? _impressora;
+  String? _tamanho;
+  String? _cor;
+
+  @override
+  void initState() {
+    super.initState();
+    _impressoras = _listarImpressoras();
+  }
+
+  Future<List<Printer>> _listarImpressoras() async {
+    final impressoras = await Printing.listPrinters();
+    if (impressoras.isNotEmpty) {
+      _impressora = impressoras.firstWhere(
+        (item) => item.name == 'ELGIN L42PRO ETIQUETA',
+        orElse: () => impressoras.first,
+      );
+    }
+    return impressoras;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Printer>>(
+      future: _impressoras,
+      builder: (context, snapshot) {
+        final impressoras = snapshot.data ?? const <Printer>[];
+        final pronto =
+            snapshot.connectionState == ConnectionState.done &&
+            !snapshot.hasError &&
+            impressoras.isNotEmpty;
+        final grade = widget.produto.grade;
+        final tamanhos = grade.isNotEmpty
+            ? grade.keys
+            : widget.produto.tamanhos.keys;
+        final cores = grade[_tamanho]?.keys ?? const <String>[];
+        final podeImprimir =
+            pronto &&
+            _impressora != null &&
+            (tamanhos.isEmpty || _tamanho != null) &&
+            (grade.isEmpty || _cor != null);
+
+        return AlertDialog(
+          title: const Text('Imprimir etiqueta'),
+          scrollable: true,
+          content: SizedBox(
+            width: 360,
+            child: !pronto
+                ? _estadoImpressoras(snapshot)
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        widget.produto.nome,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(_preco(widget.produto.preco)),
+                      const SizedBox(height: 12),
+                      if (tamanhos.isNotEmpty) ...[
+                        _seletor<String>(
+                          'Tamanho',
+                          _tamanho,
+                          tamanhos,
+                          (valor) => setState(() {
+                            _tamanho = valor;
+                            _cor = null;
+                          }),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      if (grade.isNotEmpty) ...[
+                        _seletor<String>(
+                          'Cor',
+                          _cor,
+                          cores,
+                          cores.isEmpty
+                              ? null
+                              : (valor) => setState(() => _cor = valor),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      _seletor<Printer>(
+                        'Impressora',
+                        _impressora,
+                        impressoras,
+                        (valor) => setState(() => _impressora = valor),
+                        legenda: (item) => item.name,
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        height: 60,
+                        child: BarcodeWidget(
+                          barcode: Barcode.code128(),
+                          data: widget.produto.codigo,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _marca),
+              onPressed: !podeImprimir
+                  ? null
+                  : () => Navigator.of(
+                      context,
+                    ).pop(_PedidoEtiqueta(_impressora!, _tamanho, _cor)),
+              child: const Text('Imprimir'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _estadoImpressoras(AsyncSnapshot<List<Printer>> snapshot) {
+    if (snapshot.connectionState != ConnectionState.done) {
+      return const SizedBox(
+        height: 100,
+        child: Center(child: CircularProgressIndicator(color: _marca)),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          snapshot.hasError
+              ? 'Não foi possível consultar as impressoras.'
+              : 'Nenhuma impressora encontrada.',
+        ),
+        TextButton(
+          onPressed: () => setState(() {
+            _impressora = null;
+            _impressoras = _listarImpressoras();
+          }),
+          child: const Text('Tentar novamente'),
+        ),
+      ],
+    );
+  }
+
+  Widget _seletor<T>(
+    String rotulo,
+    T? selecionado,
+    Iterable<T> valores,
+    ValueChanged<T?>? aoAlterar, {
+    String Function(T)? legenda,
+  }) {
+    return InputDecorator(
+      isEmpty: selecionado == null,
+      decoration: InputDecoration(
+        labelText: rotulo,
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: selecionado,
+          isDense: true,
+          isExpanded: true,
+          hint: const Text('Selecionar'),
+          items: [
+            for (final valor in valores)
+              DropdownMenuItem<T>(
+                value: valor,
+                child: Text(
+                  legenda?.call(valor) ?? valor.toString(),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: aoAlterar,
+        ),
+      ),
+    );
+  }
+}
+
+Future<bool> _imprimirEtiquetaDupla(
+  _DadosEtiqueta produto,
+  _PedidoEtiqueta pedido,
+) async {
+  final documento = pw.Document();
+  const largura = 36 * PdfPageFormat.mm;
+  const altura = 25 * PdfPageFormat.mm;
+  final nome = produto.nome.length > 20
+      ? '${produto.nome.substring(0, 20)}…'
+      : produto.nome;
+  final variante = [
+    if (pedido.tamanho != null) 'Tam: ${pedido.tamanho}',
+    if (pedido.cor != null) pedido.cor!,
+  ].join(' / ');
+
+  pw.Widget etiqueta() {
+    return pw.Container(
+      width: largura,
+      height: altura,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+        crossAxisAlignment: pw.CrossAxisAlignment.center,
+        children: [
+          pw.Text(
+            nome,
+            style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+            maxLines: 1,
+            textAlign: pw.TextAlign.center,
+          ),
+          if (variante.isNotEmpty)
+            pw.Text(
+              variante,
+              style: const pw.TextStyle(fontSize: 6),
+              maxLines: 1,
+              textAlign: pw.TextAlign.center,
+            ),
+          pw.Text(
+            'R\$ ${produto.preco.toStringAsFixed(2)}',
+            style: const pw.TextStyle(fontSize: 6),
+          ),
+          pw.BarcodeWidget(
+            barcode: Barcode.code128(),
+            data: produto.codigo,
+            width: 100,
+            height: 30,
+            drawText: false,
+          ),
+          pw.Text(produto.codigo, style: const pw.TextStyle(fontSize: 6)),
+        ],
+      ),
+    );
+  }
+
+  documento.addPage(
+    pw.Page(
+      pageFormat: PdfPageFormat(90 * PdfPageFormat.mm, altura),
+      margin: const pw.EdgeInsets.symmetric(horizontal: 4 * PdfPageFormat.mm),
+      build: (_) => pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [etiqueta(), pw.SizedBox(width: 10), etiqueta()],
+      ),
+    ),
+  );
+
+  return await Printing.directPrintPdf(
+    printer: pedido.impressora,
+    onLayout: (_) => documento.save(),
   );
 }
