@@ -56,6 +56,8 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
   String _buscaCliente = '';
   String tipoUsuario = '';
   String nomeUsuario = '';
+  String _nomeAtendentePerfil = '';
+  bool _gerandoRelatorio = false;
   bool _cancelando = false;
   bool _saindo = false;
 
@@ -97,6 +99,10 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
       setState(() {
         tipoUsuario = tipo;
         nomeUsuario = _campo(dados?['nome']);
+        final nomeAtendente = _campo(dados?['nomeUsuario']);
+        _nomeAtendentePerfil = nomeAtendente.isEmpty
+            ? nomeUsuario
+            : nomeAtendente;
         _uidConsulta = uid;
         _stream = _consultarVendas(_intervalo);
       });
@@ -358,7 +364,11 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
     }
     if (formas is List) {
       for (final forma in formas) {
-        final nome = _campo(forma);
+        final nome = forma is Map
+            ? _campo(
+                forma['forma'] ?? forma['tipo'] ?? forma['nome'] ?? forma['metodo'],
+              )
+            : _campo(forma);
         if (nome.isNotEmpty) yield nome;
       }
     }
@@ -402,11 +412,16 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
     String padrao = 'Cliente não informado',
   ]) {
     final cliente = venda['cliente'];
-    return _campo(cliente is Map ? cliente['nome'] : cliente, padrao);
+    final nome = _campo(cliente is Map ? cliente['nome'] : cliente);
+    return nome.isEmpty ? padrao : nome;
   }
 
-  String _atendente(Map<String, dynamic> venda, [String padrao = '']) =>
-      _campo(venda['funcionario'], _campo(venda['nomeUsuario'], padrao));
+  String _atendente(Map<String, dynamic> venda, [String padrao = '']) {
+    final nome = _campo(venda['funcionario']);
+    if (nome.isNotEmpty) return nome;
+    final usuario = _campo(venda['nomeUsuario']);
+    return usuario.isEmpty ? padrao : usuario;
+  }
 
   String _telefone(Map<String, dynamic> venda) {
     final cliente = venda['cliente'];
@@ -816,6 +831,11 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
                 child: _filtros(funcionarios, pagamentos),
               ),
             ),
+            if (!aguardando && erro == null)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                sliver: SliverToBoxAdapter(child: _painelRelatorio(exibidos)),
+              ),
             if (aguardando)
               const SliverPadding(
                 padding: EdgeInsets.symmetric(horizontal: 16),
@@ -899,12 +919,322 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
     );
   }
 
+  String? _unidadeDaLoja(String nome) {
+    final chave = _chave(nome);
+    if (RegExp(r'\bmatriz\b').hasMatch(chave)) return 'matriz';
+    if (RegExp(r'\bfilial\b').hasMatch(chave)) return 'filial';
+    if (RegExp(r'\bmodelador(es|as?)?\b').hasMatch(chave)) return 'matriz';
+    if (RegExp(r'\bjalecos?\b').hasMatch(chave)) return 'filial';
+    return null;
+  }
+
+  String _lojaDaVenda(Map<String, dynamic> venda) {
+    final caixa = _campo(venda['lojaCaixa']);
+    return caixa.isEmpty ? _campo(venda['loja']) : caixa;
+  }
+
+  String get _descricaoPeriodo {
+    final inicio = _data.format(_intervalo.start);
+    final fim = _data.format(_intervalo.end);
+    return inicio == fim ? inicio : '$inicio a $fim';
+  }
+
+  double _valorComFrete(Map<String, dynamic> venda) =>
+      _valor(venda['totalVenda']) + _valor(venda['frete']);
+
+  Widget _painelRelatorio(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> exibidos,
+  ) {
+    final uid = _uidConsulta;
+    final atendente = _chave(_nomeAtendentePerfil);
+    final lojaAtual = widget.lojaSelecionada.trim();
+    final unidadeAtual = _unidadeDaLoja(lojaAtual);
+    final vendas = <Map<String, dynamic>>[];
+    if (uid != null &&
+        uid == user?.uid &&
+        atendente.isNotEmpty &&
+        lojaAtual.isNotEmpty) {
+      for (final doc in exibidos) {
+        final venda = doc.data();
+        if (venda['usuarioId'] != uid ||
+            _chave(_atendente(venda)) != atendente ||
+            _estaCancelada(venda)) {
+          continue;
+        }
+        final loja = _lojaDaVenda(venda);
+        final mesmaLoja = unidadeAtual == null
+            ? _chave(loja) == _chave(lojaAtual)
+            : _unidadeDaLoja(loja) == unidadeAtual;
+        if (mesmaLoja) vendas.add(venda);
+      }
+    }
+
+    final total = vendas.fold<double>(
+      0,
+      (soma, venda) => soma + _valorComFrete(venda),
+    );
+    return _cartao(
+      Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _titulo('Meu relatório de vendas'),
+            const SizedBox(height: 8),
+            if (_nomeAtendentePerfil.isNotEmpty) Text(_nomeAtendentePerfil),
+            Text(lojaAtual.isEmpty ? 'Selecione uma loja' : lojaAtual),
+            Text(
+              atendente.isEmpty
+                  ? 'O perfil precisa ter um nome de funcionário cadastrado.'
+                  : '${vendas.length} venda(s) · ${_moeda.format(total)} com frete',
+              style: const TextStyle(color: _suave),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: _marca),
+              onPressed: _ocupado || _gerandoRelatorio || vendas.isEmpty
+                  ? null
+                  : () => _gerarRelatorioFuncionario(vendas, lojaAtual),
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: Text(_gerandoRelatorio ? 'Gerando PDF…' : 'Gerar PDF'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+// Substitua o método _gerarRelatorioFuncionario inteiro por este.
+Future<void> _gerarRelatorioFuncionario(
+  List<Map<String, dynamic>> vendas,
+  String loja,
+) async {
+  final uid = _uidConsulta;
+  if (_ocupado ||
+      _gerandoRelatorio ||
+      vendas.isEmpty ||
+      uid == null ||
+      user?.uid != uid) {
+    return;
+  }
+
+  final funcionario = _nomeAtendentePerfil;
+  setState(() => _gerandoRelatorio = true);
+
+  try {
+    final periodo = _descricaoPeriodo;
+    final dataArquivo = DateFormat('yyyyMMdd');
+    final dataDetalhe = DateFormat('dd/MM/yyyy HH:mm');
+    final unidade = _unidadeDaLoja(loja) ?? 'loja';
+    final nomeArquivo = 'minhas_vendas_${unidade}_'
+        '${dataArquivo.format(_intervalo.start)}_'
+        '${dataArquivo.format(_intervalo.end)}.pdf';
+
+    const rotulos = {
+      'pix': 'pix',
+      'dinheiro': 'dinheiro',
+      'debito': 'débito',
+      'credito': 'crédito',
+    };
+
+    final totaisPorForma = <String, int>{};
+    final quantidadePorForma = <String, ({String nome, int vendas})>{};
+    final detalhes = <List<String>>[];
+    var totalProdutos = 0;
+    var totalFrete = 0;
+
+    int centavos(Object? valor) => (_valor(valor) * 100).round();
+
+    Map<String, int> lerValoresPorForma(Object? registros) {
+      final valores = <String, int>{};
+      if (registros is! List) return valores;
+
+      for (final pagamento in registros.whereType<Map>()) {
+        final forma = _chavePagamento(
+          _campo(
+            pagamento['forma'] ??
+                pagamento['tipo'] ??
+                pagamento['nome'] ??
+                pagamento['metodo'],
+          ),
+        );
+        final valor = centavos(pagamento['valor'] ?? pagamento['valorPago']);
+        if (forma.isEmpty || valor <= 0) continue;
+        valores.update(forma, (soma) => soma + valor, ifAbsent: () => valor);
+      }
+      return valores;
+    }
+
+    for (final venda in vendas.reversed) {
+      final subtotal = centavos(venda['totalVenda']);
+      final frete = centavos(venda['frete']);
+      final totalVenda = subtotal + frete;
+      totalProdutos += subtotal;
+      totalFrete += frete;
+
+      final formasVenda = <String, String>{};
+      for (final forma in _formasDaVenda(venda)) {
+        formasVenda.putIfAbsent(_chavePagamento(forma), () => forma);
+      }
+
+      // Com uma única forma, o total da venda já está líquido do troco.
+      // Em pagamentos mistos, use o valor registrado de cada parcela.
+      final Map<String, int> valores;
+      if (formasVenda.length == 1) {
+        valores = {formasVenda.keys.single: totalVenda};
+      } else {
+        valores = lerValoresPorForma(venda['pagamentos']);
+        if (valores.isEmpty) {
+          valores.addAll(lerValoresPorForma(venda['formasPagamento']));
+        }
+
+        final soma = valores.values.fold<int>(0, (total, valor) => total + valor);
+        final excedente = soma - totalVenda;
+        if (excedente > 0) {
+          final dinheiro = valores['dinheiro'] ?? 0;
+          if (dinheiro >= excedente) {
+            valores['dinheiro'] = dinheiro - excedente;
+          } else {
+            // O registro não permite distribuir o valor com segurança.
+            valores.clear();
+          }
+        }
+      }
+
+      for (final entrada in valores.entries) {
+        totaisPorForma.update(
+          entrada.key,
+          (soma) => soma + entrada.value,
+          ifAbsent: () => entrada.value,
+        );
+      }
+
+      if (formasVenda.isEmpty) formasVenda[''] = 'Não informado';
+      for (final forma in formasVenda.entries) {
+        final anterior = quantidadePorForma[forma.key];
+        quantidadePorForma[forma.key] = (
+          nome: anterior?.nome ?? forma.value,
+          vendas: (anterior?.vendas ?? 0) + 1,
+        );
+      }
+
+      final data = _dataVenda(venda['dataVenda']);
+      detalhes.add([
+        data == null ? '-' : dataDetalhe.format(data),
+        _cliente(venda, 'Não informado'),
+        formasVenda.values.join(' / '),
+        _moeda.format(totalVenda / 100),
+      ]);
+    }
+
+    final valorTotal = totalProdutos + totalFrete;
+    final totalDasQuatroFormas = rotulos.keys.fold<int>(
+      0,
+      (soma, forma) => soma + (totaisPorForma[forma] ?? 0),
+    );
+    final outrosValores = valorTotal - totalDasQuatroFormas;
+    final pagamentos = quantidadePorForma.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+
+    final pdf = pw.Document();
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        maxPages: vendas.length + 10,
+        margin: const pw.EdgeInsets.all(28),
+        header: (_) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            _tituloPdf('SENHORITA CINTAS'),
+            _tituloPdf('RELATÓRIO DE VENDAS POR FUNCIONÁRIO'),
+            pw.Text('Funcionário: $funcionario'),
+            pw.Text('Loja: $loja'),
+            pw.Text('Período: $periodo'),
+            pw.Divider(),
+          ],
+        ),
+        footer: (contexto) => pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text('Página ${contexto.pageNumber}'),
+        ),
+        build: (_) => [
+          _tituloPdf('Valor Total: ${_moeda.format(valorTotal / 100)}'),
+          _tituloPdf('Totais por Forma de Pagamento:'),
+          for (final forma in rotulos.entries)
+            pw.Text(
+              'Total de vendas no ${forma.value}: '
+              '${_moeda.format((totaisPorForma[forma.key] ?? 0) / 100)}',
+            ),
+          if (outrosValores > 0)
+            pw.Text(
+              'Outras formas ou valor sem detalhamento: '
+              '${_moeda.format(outrosValores / 100)}',
+            ),
+          pw.SizedBox(height: 14),
+          _tituloPdf('Resumo do período'),
+          _tabelaRelatorio(
+            ['Vendas', 'Produtos', 'Frete', 'Total com frete'],
+            [
+              [
+                vendas.length.toString(),
+                _moeda.format(totalProdutos / 100),
+                _moeda.format(totalFrete / 100),
+                _moeda.format(valorTotal / 100),
+              ],
+            ],
+          ),
+          pw.SizedBox(height: 14),
+          _tituloPdf('Vendas realizadas'),
+          _tabelaRelatorio(
+            ['Data', 'Cliente', 'Pagamento', 'Com frete'],
+            detalhes,
+          ),
+          pw.SizedBox(height: 14),
+          _tituloPdf('Vendas por forma de pagamento'),
+          _tabelaRelatorio(
+            ['Forma de pagamento', 'Vendas'],
+            [
+              for (final entrada in pagamentos)
+                [entrada.value.nome, entrada.value.vendas.toString()],
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final bytes = await pdf.save();
+    if (!mounted || _saindo || user?.uid != uid) return;
+    await Printing.layoutPdf(name: nomeArquivo, onLayout: (_) => bytes);
+  } catch (erro) {
+    debugPrint('Vendas realizadas • relatório por funcionário: $erro');
+    _aviso('Não foi possível gerar o relatório por funcionário.');
+  } finally {
+    if (mounted) setState(() => _gerandoRelatorio = false);
+  }
+}
+
+  pw.Widget _tituloPdf(String texto) => pw.Padding(
+    padding: const pw.EdgeInsets.only(bottom: 5),
+    child: pw.Text(
+      texto,
+      style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+    ),
+  );
+
+  pw.Table _tabelaRelatorio(List<String> colunas, List<List<String>> linhas) =>
+      pw.TableHelper.fromTextArray(
+        headers: colunas,
+        data: linhas,
+        headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
+        headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
+        cellStyle: const pw.TextStyle(fontSize: 8),
+        cellAlignment: pw.Alignment.centerLeft,
+      );
+
   Widget _filtros(
     Map<String, String> funcionarios,
     Map<String, String> pagamentos,
   ) {
-    final inicio = _data.format(_intervalo.start);
-    final fim = _data.format(_intervalo.end);
     return _cartao(
       Padding(
         padding: const EdgeInsets.all(16),
@@ -914,7 +1244,7 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
             _titulo('Período'),
             const SizedBox(height: 4),
             Text(
-              '${inicio == fim ? inicio : '$inicio a $fim'} · ${tipoUsuario == 'admin' ? 'Todas as lojas' : 'Minhas vendas'}',
+              '$_descricaoPeriodo · ${tipoUsuario == 'admin' ? 'Todas as lojas' : 'Minhas vendas'}',
               style: const TextStyle(color: _suave),
             ),
             const SizedBox(height: 10),
@@ -1043,7 +1373,7 @@ class _VendasRealizadasViewState extends State<VendasRealizadasView> {
     final data = _dataVenda(venda['dataVenda']);
     final cancelada = _estaCancelada(venda);
     final funcionario = _atendente(venda);
-    final lojaCaixa = _campo(venda['lojaCaixa'], _campo(venda['loja']));
+    final lojaCaixa = _lojaDaVenda(venda);
     return _cartao(
       ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
